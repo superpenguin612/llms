@@ -461,13 +461,15 @@ def cmd_scan(args) -> int:
 # --- apply -------------------------------------------------------------------------------
 
 def _key(p) -> str:
-    return p.get("obtained_from") or p["file"]
+    return p.get("obtained_from") or p.get("file") or ""
 
 
 def _validate(vault, props) -> list:
     errs = []
     for i, p in enumerate(props, 1):
         where = f"line {i} ({_key(p)})"
+        if not str(p.get("file") or "").strip():  # vault.root / "" is the vault directory, not a file
+            errs.append(f"{where}: file is empty or missing; name the inbox file this proposal routes")
         route = p.get("route")
         if route not in ROUTES:
             errs.append(f"{where}: route {route!r} is not one of {', '.join(ROUTES)}")

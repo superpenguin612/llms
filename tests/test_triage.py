@@ -302,6 +302,20 @@ class TestTriageFlow(VaultTestCase):
             triage.apply(v, "20260101-000000")
         self.assertEqual(read_record(self.root / "injects/round-1/task.md").fm["event"], "round-1")
 
+    def test_empty_or_missing_file_is_a_proposal_error(self):
+        rdir = self.root / ".kb" / "triage" / "20260101-000000"
+        rdir.mkdir(parents=True)
+        props = [{"file": "", "obtained_from": "inbox/alice/x.pdf", "route": "exclude", "reason": "junk"},
+                 {"route": "source"}, {"file": "  ", "route": "exclude", "reason": "x"}]
+        (rdir / "proposals.jsonl").write_text("".join(json.dumps(p) + "\n" for p in props))
+        with mock.patch.object(triage, "_runs_dir", return_value=rdir.parent):
+            with self.assertRaises(KBError) as cm:
+                triage.apply(self.v, "20260101-000000")
+        msg = str(cm.exception)
+        self.assertEqual(msg.count("file is empty or missing"), 3, msg)
+        self.assertIn("line 1 (inbox/alice/x.pdf): file is empty or missing", msg)
+        self.assertIn("line 2 (): file is empty or missing", msg)
+
     def test_scan_subtree_and_coexisting_runs(self):
         with mock.patch.object(triage.ocr, "available", return_value=False):
             a = triage.scan(self.v, path="inbox/bob")

@@ -1,10 +1,11 @@
 import datetime as dt
 import os
+from unittest import mock
 
 from kb import inject, secrets
 from kb.records import (append_to_section, get_section, parse_excerpts, parse_links, replace_block,
                         split_front_matter)
-from kb.util import KBError, excerpt_in_text, is_due, normalize, parse_cadence
+from kb.util import KBError, atomic_write, excerpt_in_text, is_due, normalize, parse_cadence
 from kb.vault import find_root, open_vault
 from tests.helpers import VaultTestCase, make_vault
 
@@ -87,6 +88,24 @@ class TestVault(VaultTestCase):
             open_vault(start=local)
         os.environ["KB_AGENT"] = "local"
         open_vault(start=local)
+
+
+    def test_vanished_file_and_temp_names_are_skipped(self):
+        root = make_vault(self.tmp / "kb", records={"sources/a.md": ({"type": "source", "title": "A"}, "\n# A\n")})
+        (root / "sources" / ".b.md.k3j2h1").write_text("---\ntype: source\n---\n")  # atomic_write temp name
+        v = open_vault(start=root)
+        gone = root / "sources" / "gone.md"
+        gone.write_text("---\ntype: source\n---\n")
+        real = list(v.iter_markdown())
+        gone.unlink()  # listed, then removed before it is read
+        with mock.patch.object(type(v), "iter_markdown", lambda self: iter(real)):
+            self.assertEqual([r.id for r in v.records], ["a"])
+
+    def test_atomic_write_temp_name_is_not_a_record_name(self):
+        seen = []
+        with mock.patch("os.replace", side_effect=lambda tmp, dst: seen.append(os.path.basename(tmp))):
+            atomic_write(self.tmp / "x.md", "hi")
+        self.assertFalse(seen[0].endswith(".md"))
 
 
 class TestScanners(VaultTestCase):

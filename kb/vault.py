@@ -121,6 +121,8 @@ class Vault:
             except KBError as e:
                 errs.append((self.rel(p), str(e)))
                 continue
+            except FileNotFoundError:  # a concurrent writer renamed or removed it since listing
+                continue
             if r is not None:
                 out.append(r)
         self._load_errors = errs

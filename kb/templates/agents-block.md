@@ -5,7 +5,7 @@ This folder is a `kb` vault. The Markdown files and `originals/` are the source 
 
 **Query recipe** (narrow first, then read):
 1. `kb find --type T [--where key=value] [--tag X]` lists candidate records.
-2. `kb grep "terms" [--in body|excerpt|text|repo-doc]` searches the full text.
+2. `kb grep "terms" [--in body|excerpt|text|repo-doc]` searches words (ranked). For exact strings with punctuation (paths, IPs, hashes, commands) use `kb grep --exact "HKLM\SOFTWARE\X"`; for patterns use `kb grep --regex 'CVE-\d{4}-\d+'`. Both use ripgrep and return citable refs (`id#eN`, `id:line`).
 3. `kb head ID` shows front matter and body without excerpts; `kb show ID#eN` shows one quote and its location.
 4. `kb query "SELECT ..."` runs read-only SQL over `records`, `props`, `links`, `excerpts` and `fts`.
 

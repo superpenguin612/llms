@@ -4,7 +4,12 @@ Querying is read-only unless the user asks you to file the answer as a note.
 
 1. **Route first.** The vault's `AGENTS.md` (`kb:agents` block) lists each type, its folder and its record count. Use it to decide where an answer would live.
 2. **Filter on metadata:** `kb find --type source --where tier=official --tag scoring`, or `kb find --origin internal --type note`.
-3. **Search text:** `kb grep "persistence"`. It searches record bodies, excerpts, extracted text and registered repo docs. Narrow it with `--in excerpt|text|body|repo-doc`. If a search misses, retry with synonyms, abbreviations, and the exact strings a source would use (product names, commands, error text).
+3. **Search text:**
+   - **Words:** `kb grep "persistence"`. A ranked full-text search over record bodies, excerpts, extracted text and registered repo docs. Narrow it with `--in excerpt|text|body|repo-doc`.
+   - **Exact strings** with punctuation (registry paths, IPs, hashes, commands, config lines): `kb grep --exact 'server schannel = yes'`. Word search matches words in any order, so it isn't precise for these.
+   - **Patterns:** `kb grep --regex 'CVE-\d{4}-\d+'`.
+   - `--exact` and `--regex` use ripgrep when it's installed and return citable refs: `id#eN` inside an excerpt, `id:line` elsewhere in a record, `text/<id>.md:line` in extracted text. They match within a single line, so text that wraps across lines (common in PDFs) can be missed. Fall back to word search for those.
+   - If a search misses, retry with synonyms, abbreviations, and the exact strings a source would use (product names, commands, error text).
 4. **Joins and counts:** `kb query "SELECT …"` on `.kb/kb.sqlite`. The tables are `records`, `props`, `links`, `excerpts`, `fts`, `watch_events`. For example, find the evidence that supports a record:
    `SELECT src FROM links WHERE dst='zerologon-dc' AND kind='fm'`.
 5. **Read heads, not whole files:**

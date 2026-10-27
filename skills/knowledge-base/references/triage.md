@@ -8,6 +8,8 @@ Everything new enters a vault through `inbox/<contributor>/`: screenshots, termi
 kb triage scan --context <context-id>     # context = the event or engagement, from kb.yaml contexts
 ```
 
+To scan only part of the inbox, pass a folder: `kb triage scan inbox/<name>/<batch>`. Runs over different folders can coexist; `apply <run>` only touches that run's files.
+
 The scan hashes, dedups and unpacks. It OCRs images, reads timestamps, extracts IPs, hostnames, CVEs and URLs, matches them against entity handles, and flags secrets. It writes `.kb/triage/<run>/proposals.jsonl`, one proposal per file, and prints a summary.
 
 ## 2. Review (your part)
@@ -25,6 +27,7 @@ Work through `proposals.jsonl` in batches of about 20. For each proposal:
 - **Near-duplicates:** keep the most informative shot as the primary and set the others' route to `duplicate` (or keep them and link them with `same_as`).
 - **Write-ups from teammates** (route `note`, filed as a `topic` or the profile's other synthesis type): keep the file as it is. Afterwards, split its content into the right outputs, entities and notes, and cite it.
 - **Published documents** (route `source`) and **URL lists** (route `capture`) are captured during apply; mine them afterwards ([capture.md](capture.md)).
+- **Record keys:** to set front-matter keys on the record (`tier`, `kind`, `season`, `event`, `tags`, `description`, any key of the type or a scope field), add `"set": {"tier": "official", "season": 2026}` to the proposal. Unknown keys fail `apply` with the allowed list.
 - **Anything unclear:** set `route: hold` with a `question`, and ask the user. Don't guess.
 
 ## 3. Apply

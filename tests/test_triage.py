@@ -227,6 +227,56 @@ class TestTriageFlow(VaultTestCase):
         self.assertEqual(st["inbox"], {"bob": 1})
         self.assertEqual(st["held"][0]["question"], "what is this binary?")
 
+    def test_set_keys(self):
+        r, props = self._scan()
+        run, note, pdf = r["run"], props["inbox/alice/writeup.md"], props["inbox/bob/paper.pdf"]
+        note.update(title="Write-up", set={"description": "d", "season": 2026, "bogus": 1})
+        pdf["set"] = {"tier": "official", "season": "nope"}
+        props = {k: p for k, p in props.items() if p["route"] in ("note", "source")}
+        self._save(run, props)
+        with self.assertRaises(KBError) as cm:
+            triage.apply(self.v, run)
+        msg = str(cm.exception)
+        self.assertIn("set key 'bogus' is not a key", msg)
+        self.assertIn("set season: expected an integer", msg)
+        self.assertEqual(msg.count("\n"), 2, msg)
+        del note["set"]["bogus"]
+        pdf["set"] = {"tier": "official", "kind": "pdf"}
+        self._save(run, props)
+        seen = []
+
+        class Rec:
+            id, fm, body = "paper", {}, "\n# paper\n"
+            save = lambda self: seen.append((self.fm, self.body))
+        cap = fake_capture([])
+        cap.capture_file = lambda *a, **k: Rec()
+        with mock.patch.dict(sys.modules, {"kb.capture": cap}):
+            triage.apply(self.v, run)
+        fm = read_record(self.root / "topics/writeup.md").fm
+        self.assertEqual((fm["title"], fm["description"], fm["season"]), ("Write-up", "d", 2026))
+        self.assertIn("# Write-up", (self.root / "topics/writeup.md").read_text())
+        self.assertEqual(seen[0][0], {"tier": "official", "kind": "pdf"})
+
+    def test_scan_subtree_and_coexisting_runs(self):
+        with mock.patch.object(triage.ocr, "available", return_value=False):
+            a = triage.scan(self.v, path="inbox/bob")
+            b = triage.scan(self.v, path="inbox/alice")
+            with self.assertRaisesRegex(KBError, "not a folder under inbox/"):
+                triage.scan(self.v, path="evidence")
+        self.assertEqual((a["files"], b["files"]), (3, 5))  # bob: pdf + zip's 2 members; alice: 5 files
+        pa = [json.loads(l)["obtained_from"] for l in (self.root / a["proposals"]).read_text().splitlines()]
+        self.assertTrue(all(o.startswith("inbox/bob/") for o in pa))
+        ids = [json.loads(l)["id"] for l in (self.root / b["proposals"]).read_text().splitlines()]
+        self.assertTrue(set(ids) - {""})
+        props = [json.loads(l) for l in (self.root / a["proposals"]).read_text().splitlines()]
+        for p in props:
+            p.update(title="t", description="d") if p["route"] == "evidence" else None
+        (self.root / a["proposals"]).write_text("".join(json.dumps(p) + "\n" for p in props))
+        with mock.patch.dict(sys.modules, {"kb.capture": fake_capture([])}):
+            triage.apply(self.v, a["run"])  # a only touches bob's files
+        self.assertTrue((self.root / "inbox/alice/writeup.md").exists())
+        self.assertEqual(triage.status(open_vault(start=self.root))["pending_runs"], [b["run"]])
+
     def test_capture_unavailable_holds(self):
         r, props = self._scan()
         keep = {k: p for k, p in props.items() if p["route"] in ("source", "capture")}

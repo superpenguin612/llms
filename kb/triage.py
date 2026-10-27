@@ -13,6 +13,7 @@ from collections import Counter
 from pathlib import Path, PurePosixPath
 
 from kb import capture, ocr, secrets
+from kb.profile import check_value
 from kb.records import dump_front_matter, split_front_matter, write_record
 from kb.util import KBError, append_log, atomic_write, emit, iso, now_utc, sha256_file, slugify, today
 from kb.vault import open_from_args
@@ -20,7 +21,7 @@ from kb.vault import open_from_args
 ROUTES = ("evidence", "source", "capture", "note", "entity-update", "duplicate", "exclude", "hold")
 FIELDS = ("file", "obtained_from", "sha256", "contributor", "route", "type", "id", "context", "captured",
           "captured_from", "ocr_excerpt", "suggest_links", "sensitive", "title", "description", "phase",
-          "links", "supports", "reason", "question")
+          "links", "supports", "reason", "question", "set")
 NEXT_STEP = ("review proposals.jsonl: view each image, fill title/description/phase/links/supports, "
              "then kb triage apply {run}")
 
@@ -281,12 +282,12 @@ def _new_run(vault) -> tuple[str, Path]:
     return run, d
 
 
-def _inbox_files(vault):
-    """(path, contributor, rel) for every inbox file except queue files and dotfiles."""
+def _inbox_files(vault, sub: Path | None = None):
+    """(path, contributor, rel) for every inbox file (under sub, if given) except queue files and dotfiles."""
     inbox = vault.root / "inbox"
     if not inbox.is_dir():
         return
-    for dirpath, dirnames, filenames in os.walk(inbox):
+    for dirpath, dirnames, filenames in os.walk(sub or inbox):
         dirnames[:] = sorted(n for n in dirnames if not n.startswith("."))
         d = Path(dirpath)
         for fn in sorted(filenames):
@@ -298,7 +299,16 @@ def _inbox_files(vault):
             yield p, who, vault.rel(p)
 
 
-def scan(vault, context: str | None = None) -> dict:
+def _subtree(vault, path: str) -> Path:
+    inbox, sub = (vault.root / "inbox").resolve(), (vault.root / path).resolve()
+    if not (sub.is_dir() and inbox in sub.parents):
+        raise KBError(f"{path} is not a folder under inbox/; pass one like inbox/<name>/<folder> "
+                      f"(relative to the vault root; omit it to scan everything)")
+    return sub
+
+
+def scan(vault, context: str | None = None, path: str | None = None) -> dict:
+    sub = _subtree(vault, path) if path else None
     prof = vault.profile
     contexts = [c.get("id") if isinstance(c, dict) else c for c in prof.get("contexts") or []]
     if context and contexts and context not in contexts:
@@ -319,7 +329,7 @@ def scan(vault, context: str | None = None) -> dict:
     run, rdir = _new_run(vault)
 
     items, archives = [], {}  # items: (path, contributor, obtained_from, display name)
-    for p, who, rel in _inbox_files(vault):
+    for p, who, rel in _inbox_files(vault, sub):
         if detect_kind(p) == "archive":
             dest = rdir / "unpacked" / slugify(rel, 200)
             try:
@@ -339,6 +349,9 @@ def scan(vault, context: str | None = None) -> dict:
     # ids in use: records, aliases and file stems outside the inbox (vault.new_id counts inbox files too)
     taken = set(vault.by_name) | {Path(k).stem.casefold() for k, f in vault.files_by_name.items()
                                   if not vault.rel(f).startswith(("inbox/", ".kb/"))}
+    for f in _runs_dir(vault).glob("*/proposals.jsonl"):  # ids proposed by runs not applied yet
+        if not _load_json(f.parent / "applied.json", {}).get("applied_at"):
+            taken |= {str(json.loads(l).get("id", "")).casefold() for l in f.read_text(encoding="utf-8").splitlines() if l.strip()}
     seqs, seen, proposals = {}, {}, []
     for n, (p, who, origin, name, problem) in enumerate(items, 1):
         sha = sha256_file(p)
@@ -424,7 +437,7 @@ def _scan_text(r: dict) -> list:
 
 def cmd_scan(args) -> int:
     v = open_from_args(args)
-    r = scan(v, args.context)
+    r = scan(v, args.context, args.path)
     emit(args, r, _scan_text)
     return 0
 
@@ -446,6 +459,7 @@ def _validate(vault, props) -> list:
         t = vault.profile.types.get(p.get("type") or "")
         if p.get("type") and t is None:
             errs.append(f"{where}: unknown type {p['type']!r}")
+        errs += _check_set(vault, where, route, t or vault.profile.types.get(p.get("type") or "source"), p.get("set"))
         if route == "evidence":
             if not str(p.get("title", "")).strip() or not str(p.get("description", "")).strip():
                 errs.append(f"{where}: evidence needs a title and a description (view the file first)")
@@ -467,6 +481,42 @@ def _validate(vault, props) -> list:
         if route == "entity-update" and not p.get("links"):
             errs.append(f"{where}: entity-update needs the updated entity in links")
     return errs
+
+
+def _check_set(vault, where, route, t, keys) -> list:
+    """Errors for a proposal's `set` (extra front-matter keys written onto the record)."""
+    if not keys:
+        return []
+    if not isinstance(keys, dict):
+        return [f"{where}: set must be an object like {{\"tier\": \"primary\"}}"]
+    if route not in ("evidence", "note", "source", "capture"):
+        return [f"{where}: set has no effect on route {route!r}; it applies to evidence, note, source and capture"]
+    prof = vault.profile
+    specs = {**(prof.get("scope_fields") or {}), **(t.keys if t else {}),
+             "title": "string", "description": "string", "tags": prof.tags if prof.tags is not None else "list"}
+    if t and t.origin == "external" and prof.tiers:
+        specs["tier"] = prof.tiers
+    errs = []
+    for k, v in keys.items():
+        if k not in specs:
+            errs.append(f"{where}: set key {k!r} is not a key of type {t.name if t else '?'}, a scope field, "
+                        f"title, description, tags or tier; allowed: {', '.join(sorted(specs))}")
+        elif msg := check_value(specs[k], v):
+            errs.append(f"{where}: set {k}: {msg}")
+    return errs
+
+
+def _retitle(body: str, title) -> str:
+    """Rewrite the first H1 to the title (lint wants them equal)."""
+    return re.sub(r"(?m)^#[ \t]+.+$", lambda _: f"# {title}", body, count=1)
+
+
+def _set_keys(rec, keys) -> None:
+    if keys:
+        rec.fm.update(keys)
+        if "title" in keys:
+            rec.body = _retitle(rec.body, keys["title"])
+        rec.save()
 
 
 def _copy_in(src: Path, dest: Path, sha: str) -> None:
@@ -517,6 +567,7 @@ def _apply_evidence(vault, p, ocr_text: str) -> str:
           "sensitive": p.get("sensitive") or None, "updated": dt.date.fromisoformat(today())}
     if kind == "image":
         fm["ocr_quality"] = "good" if len(ocr_text.split()) >= 5 else ("partial" if ocr_text.strip() else "none")
+    fm.update(p.get("set") or {})
     fm = {k: v for k, v in fm.items() if v is not None}
     body = f"\n# {fm['title']}\n\n![[{name}]]\n\n{fm['description']}\n"
     if ocr_text.strip():
@@ -546,8 +597,11 @@ def _apply_note(vault, p) -> str:
                  ("description", p.get("description")), ("contributor", [p["contributor"]])):
         if v and not fm.get(k):
             fm[k] = v
+    fm.update(p.get("set") or {})
     if dest.exists():
         raise KBError(f"{vault.rel(dest)} already exists; give the proposal another id")
+    if h1:
+        body = _retitle(body, fm["title"])
     atomic_write(dest, dump_front_matter(fm) + (body if body.startswith("\n") else "\n" + body))
     return rid
 
@@ -604,6 +658,7 @@ def apply(vault, run: str) -> dict:
                 if route == "source":
                     rec = cap.capture_file(vault, vault.root / p["file"], id=p.get("id") or None,
                                            type=p.get("type") or "source", obtained_from=key)
+                    _set_keys(rec, p.get("set"))
                     finish(p, "routed", rec.id)
                     continue
                 failed = []
@@ -611,8 +666,9 @@ def apply(vault, run: str) -> dict:
                     if f"{key}|{url}" in urls:
                         continue
                     try:
-                        urls[f"{key}|{url}"] = cap.capture_url(vault, url, type=p.get("type") or "source",
-                                                               obtained_from=key).id
+                        rec = cap.capture_url(vault, url, type=p.get("type") or "source", obtained_from=key)
+                        _set_keys(rec, p.get("set"))
+                        urls[f"{key}|{url}"] = rec.id
                         _save_json(rdir / "applied.json", state)
                     except KBError as e:
                         failed.append(f"{url}: {e}")
@@ -691,6 +747,7 @@ def register(subparsers, common) -> None:
     p = subparsers.add_parser("triage", parents=[common], help="route inbox files: scan, review, apply")
     sub = p.add_subparsers(dest="triage_command", metavar="SUBCOMMAND")
     s = sub.add_parser("scan", parents=[common], help="propose a route for every inbox file")
+    s.add_argument("path", nargs="?", metavar="PATH", help="only scan this folder under inbox/ (e.g. inbox/alice/batch-3)")
     s.add_argument("--context", help="profile context for evidence ids and folders")
     s.set_defaults(func=cmd_scan)
     a = sub.add_parser("apply", parents=[common], help="execute a reviewed run's proposals")

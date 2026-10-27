@@ -283,20 +283,34 @@ def _new_run(vault) -> tuple[str, Path]:
 
 
 def _inbox_files(vault, sub: Path | None = None):
-    """(path, contributor, rel) for every inbox file (under sub, if given) except queue files and dotfiles."""
+    """(path, contributor, rel) for every inbox file (under sub, if given) except queue files."""
     inbox = vault.root / "inbox"
     if not inbox.is_dir():
         return
     for dirpath, dirnames, filenames in os.walk(sub or inbox):
-        dirnames[:] = sorted(n for n in dirnames if not n.startswith("."))
+        dirnames.sort()
         d = Path(dirpath)
         for fn in sorted(filenames):
-            if fn.startswith(".") or (d == inbox and re.fullmatch(r"discover-.*\.md", fn)):
+            if d == inbox and re.fullmatch(r"discover-.*\.md", fn):
                 continue
             p = d / fn
             parts = p.relative_to(inbox).parts
             who = parts[0] if len(parts) > 1 else _git_author(vault.root, p)
             yield p, who, vault.rel(p)
+
+
+_JUNK_DIRS = {".git", ".svn", ".hg"}
+_JUNK_FILES = {".ds_store", "thumbs.db", "desktop.ini"}
+
+
+def _junk(path: str) -> str:
+    """Why a path (inbox-relative, or an archive member) is VCS/OS junk, else ''."""
+    parts = path.split(":")[-1].replace("\\", "/").split("/")
+    if any(x in _JUNK_DIRS for x in parts[:-1]) or parts[-1] in _JUNK_DIRS:
+        return "VCS metadata"
+    if parts[-1].casefold() in _JUNK_FILES or parts[-1].startswith("._"):
+        return "OS junk file"
+    return ""
 
 
 def _subtree(vault, path: str) -> Path:
@@ -328,7 +342,7 @@ def scan(vault, context: str | None = None, path: str | None = None) -> dict:
     idx = handle_index(vault)
     run, rdir = _new_run(vault)
 
-    items, archives = [], {}  # items: (path, contributor, obtained_from, display name)
+    items, archives = [], {}  # items: (path, contributor, obtained_from, display name, problem)
     for p, who, rel in _inbox_files(vault, sub):
         if detect_kind(p) == "archive":
             dest = rdir / "unpacked" / slugify(rel, 200)
@@ -378,7 +392,9 @@ def scan(vault, context: str | None = None, path: str | None = None) -> dict:
             _save_json(rdir / f"{n:04d}.hits.json", {"file": prop["file"], "sha256": sha, "hits": hits})
 
         dup = known.get(sha) or seen.get(sha)
-        if dup:
+        if junk := _junk(origin):
+            prop.update(route="exclude", reason=f"{junk} ({name})")
+        elif dup:
             prop.update(route="duplicate", reason=f"duplicate-of {dup}")
         elif problem:
             prop.update(route="hold", question=problem)
@@ -718,8 +734,7 @@ def status(vault) -> dict:
     if inbox.is_dir():
         for p in inbox.rglob("*"):
             parts = p.relative_to(inbox).parts
-            if p.is_file() and not any(x.startswith(".") for x in parts) \
-                    and not (len(parts) == 1 and re.fullmatch(r"discover-.*\.md", p.name)):
+            if p.is_file() and not (len(parts) == 1 and re.fullmatch(r"discover-.*\.md", p.name)):
                 per[parts[0] if len(parts) > 1 else "(inbox root)"] += 1
     return {"pending_runs": pending, "inbox": dict(sorted(per.items())), "held": held}
 

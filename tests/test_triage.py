@@ -167,6 +167,21 @@ class TestTriageFlow(VaultTestCase):
         self.assertTrue(hits["hits"][0]["boxes"])
         self.assertIn(f"kb triage apply {r['run']}", "\n".join(triage._scan_text(r)))
 
+    def test_hidden_kept_junk_excluded(self):
+        for rel, data in {"inbox/alice/.Everyone/a.txt": "hello\n", "inbox/alice/.git/config": "x\n",
+                          "inbox/alice/.DS_Store": "d", "inbox/alice/._a.txt": "r", "inbox/alice/Thumbs.db": "t",
+                          "inbox/bob/z.zip": zip_bytes({".hid/b.txt": b"b\n", "__MACOSX/._b.txt": b"r"})}.items():
+            f = self.root / rel
+            f.parent.mkdir(parents=True, exist_ok=True)
+            f.write_bytes(data.encode() if isinstance(data, str) else data)
+        _, props = self._scan()
+        route = lambda k: props[f"inbox/{k}"]["route"]
+        self.assertNotEqual(route("alice/.Everyone/a.txt"), "exclude")
+        self.assertNotEqual(route("bob/z.zip:.hid/b.txt"), "exclude")
+        for k in ("alice/.git/config", "alice/.DS_Store", "alice/._a.txt", "alice/Thumbs.db", "bob/z.zip:__MACOSX/._b.txt"):
+            self.assertEqual(route(k), "exclude", k)
+            self.assertTrue(props[f"inbox/{k}"]["reason"])
+
     def test_apply(self):
         r, props = self._scan()
         run = r["run"]

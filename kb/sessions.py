@@ -340,7 +340,7 @@ def ingest(v, tool="all", since=None, dry_run=False, paths=()) -> dict:
         sid8 = re.sub(r"[^0-9A-Za-z]", "", s["session_id"])[:8] or "unknown"
         rid = f"session-{started.astimezone(dt.timezone.utc):%Y-%m-%d}-{kind}-{sid8}"
         _ingest_one(v, td, rid, f, raw, s, started, ended, extra, dry_run, rep)
-    if not dry_run:
+    if not dry_run and (rep["created"] or rep["updated"]):  # quiet runs touch no files
         sk = sum(rep["skipped"].values())
         append_log(v.root, "sessions", "ingest", f"created {len(rep['created'])}, updated {len(rep['updated'])}, "
                    f"unchanged {len(rep['unchanged'])}, skipped {sk}")

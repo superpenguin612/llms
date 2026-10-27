@@ -1,0 +1,104 @@
+# Starter profile: generic. Edit freely; kb only depends on the traits.
+schema: 4
+name: example
+description: "One sentence: what this knowledge base covers."
+access: shared            # shared: any agent may read it. local: local-model agents only (KB_AGENT=local)
+
+# Source roles for external records. synthetic = LLM-written material: citable as context, never as support.
+tiers: [official, primary, secondary, community, vendor, synthetic]
+
+scope_fields: {}          # e.g. {season: year, region: [east, west]}
+phases: []                # e.g. [recon, exploit, report] for evidence
+contexts: []              # e.g. [{id: 2026-event}] -> evidence/<context>/
+events: []                # e.g. [{id: 2026-event, date: 2026-10-24}] (drives before-event refresh)
+inbox: {max_age: 2d}
+caps: {warn_mb: 10, max_mb: 25}
+
+types:
+  source:                 # something someone else published
+    folder: sources
+    origin: external
+    original: immutable
+    text: extracted
+    quotes: verbatim
+    role: input
+    tracked: refresh
+    refresh: never
+    keys:
+      kind: [webpage, blog-post, docs, pdf, slides, office-doc, spreadsheet, video, podcast, repo, code,
+             social-post, chat, email, image, dataset, collection, search-results]
+      author: list
+      container: string
+      issued: date
+      revised: list
+      url: string
+      given_url: string
+      archive: list
+      accessed: date
+      source_note: string
+      same_work: links
+      derived_from: link
+      entities: links
+      depth: [full, partial, none, empty]
+      depth_note: string
+      mined_by: string
+      mined_on: date
+    required: [kind]
+
+  entity:                 # our notes on something we track: person, team, org, project, host, product
+    folder: "entities/{kind}"
+    origin: internal
+    role: synthesis
+    tracked: watch
+    watch_every: 1d
+    claims: cited
+    keys:
+      kind: [person, team, org, project, host, product]
+      handles: list
+      affiliations: links
+      osint_scope: string
+      first_seen: date
+      collectors: list
+    required: [kind]
+
+  evidence:               # something we captured ourselves: screenshot, log, pcap, scan ...
+    folder: "evidence/{context}"
+    origin: internal
+    original: immutable
+    text: ocr
+    role: input
+    keys:
+      kind: [screenshot, terminal, log, pcap, scan, ticket, export, document, file]
+      file: link
+      context: string
+      captured: string
+      captured_from: [exif, filename, mtime, transcript, stated]
+      contributor: list
+      obtained_from: string
+      phase: string
+      hosts: links
+      entities: links
+      supports: links
+      same_as: links
+      sensitive: [secrets, pii, client-data]
+      redacted_copy: string
+      ocr_quality: [good, partial, none]
+    required: [kind, context]
+
+  note:                   # our synthesis: topics, playbooks, plans
+    folder: notes
+    origin: internal
+    role: synthesis
+    claims: cited
+    keys:
+      note_kind: string
+      sources: links
+
+  output:                 # something meant to leave the KB (findings, requirements ...)
+    folder: "outputs/{kind}"
+    origin: internal
+    role: output
+    claims: cited
+    keys:
+      kind: string
+    required: [kind]

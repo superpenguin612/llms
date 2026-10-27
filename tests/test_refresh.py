@@ -64,7 +64,8 @@ class TestRefresh(VaultTestCase):
         self.assertNotIn("## Changes", rec.body)
 
     def test_failure_marks_stale(self):
-        with web({URL: 500, "https://archive.org/*": FakeResp('{"archived_snapshots": {}}', "x")}):
+        with web({URL: 500, "https://archive.org/*": FakeResp('{"archived_snapshots": {}}', "x"),
+                  "https://web.archive.org/*": 404}):
             code, out = self.run_cli("rules")
         self.assertIn("rules: failed", out)
         rec = open_vault(start=self.root).require("rules")

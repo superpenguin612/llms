@@ -31,6 +31,7 @@ from kb.util import (KBError, append_log, atomic_write, emit, excerpt_in_text, i
 
 UA = f"Mozilla/5.0 (compatible; kb/{__version__}; knowledge-base capture)"
 MB = 1 << 20
+MIN_TEXT = 200  # fewer characters of body text than this means the capture is a shell, not the page
 VIDEO_HOSTS = ("youtube.com", "youtu.be", "vimeo.com")
 _REPO = re.compile(r"^https?://(?:www\.)?(github\.com|gitlab\.com|codeberg\.org)/([^/\s?#]+)/([^/\s?#]+?)(?:\.git)?/?$")
 CARD_KIND = {"html": "webpage", "pdf": "pdf", "image": "image", "subtitles": "video", "code": "code", "text": "docs",
@@ -61,16 +62,29 @@ def http_get(url, limit=None, headers=None, timeout=30):
                                ctype=hdrs.get_content_type() if hdrs else "", body=body)
 
 
-def wayback_snapshot(url) -> str | None:
-    """Newest existing Wayback snapshot (raw `id_` form), read only; never submits anything."""
+def _wb_json(url):
+    return json.loads(http_get(url).body or b"[]")
+
+
+def wayback_snapshot(url):
+    """(raw `id_` snapshot URL, failure reason). Read only; never submits anything. The availability API is
+    flaky, so fall back to the CDX index, then to a direct /web/2id_/ fetch (the caller checks its status)."""
+    q, why = urllib.parse.quote(url, safe=""), []
     try:
-        r = http_get("https://archive.org/wayback/available?url=" + urllib.parse.quote(url, safe=""))
-        snap = json.loads(r.body or b"{}").get("archived_snapshots", {}).get("closest") or {}
-    except (OSError, ValueError):
-        return None
-    if not snap.get("available") or not str(snap.get("status", "200")).startswith("2") or not snap.get("url"):
-        return None
-    return re.sub(r"/web/(\d+)/", r"/web/\1id_/", snap["url"], count=1)
+        snap = _wb_json("https://archive.org/wayback/available?url=" + q).get("archived_snapshots", {}).get("closest") or {}
+        if snap.get("available") and str(snap.get("status", "200")).startswith("2") and snap.get("url"):
+            return re.sub(r"/web/(\d+)/", r"/web/\1id_/", snap["url"], count=1), ""
+        why.append("availability API lists none")
+    except (OSError, ValueError, AttributeError) as e:
+        why.append(f"availability API failed: {getattr(e, 'reason', e)}")
+    try:
+        rows = _wb_json(f"https://web.archive.org/cdx/search/cdx?url={q}&limit=-1&filter=statuscode:200&output=json")
+        if len(rows) > 1:
+            return f"https://web.archive.org/web/{rows[-1][1]}id_/{rows[-1][2]}", ""
+        why.append("CDX index lists none")
+    except (OSError, ValueError, IndexError, TypeError) as e:
+        why.append(f"CDX index failed: {getattr(e, 'reason', e)}")
+    return "https://web.archive.org/web/2id_/" + url, "; ".join(why)
 
 
 def _ext(resp) -> str:
@@ -94,14 +108,16 @@ def _fetch_web(vault, url, stage):
         r, err = None, str(getattr(e, "reason", e))
     via = "urllib"
     if r is None or r.status >= 400:
-        snap = wayback_snapshot(url)
+        snap, wb = wayback_snapshot(url)
         why = f"HTTP {live}" if live else f"network error: {err}"
-        if not snap:
-            raise KBError(f"{url} is dead ({why}) and has no Wayback snapshot; capture a copy by hand "
-                          f"(kb capture FILE --id ...) or write the card by hand with an original_note saying why")
-        r = http_get(snap, limit)
+        hand = "capture a copy by hand (kb capture FILE --id ...) or write the card by hand with an original_note saying why"
+        try:
+            r = http_get(snap, limit)
+        except OSError as e:
+            raise KBError(f"{url} is dead ({why}) and Wayback failed ({wb or getattr(e, 'reason', e)}); {hand}") from None
         if r.status >= 400:
-            raise KBError(f"{url} is dead ({why}) and its Wayback snapshot returned HTTP {r.status}")
+            raise KBError(f"{url} is dead ({why}) and has no usable Wayback snapshot ({wb + '; ' if wb else ''}"
+                          f"{snap} returned HTTP {r.status}); {hand}")
         via = f"wayback (live: {why})"
     ext = _ext(r)
     base = Path(urllib.parse.urlparse(r.url).path).name
@@ -129,11 +145,26 @@ def _run(cmd, cwd=None, timeout=600) -> str:
         raise KBError(f"{cmd[0]} timed out after {timeout}s") from None
 
 
+def pick_caption(info) -> tuple[str, bool] | None:
+    """(language, is_automatic) from the tracks yt-dlp lists: manual en, en-*; then automatic en, en-orig, en-*."""
+    for key, auto in (("subtitles", False), ("automatic_captions", True)):
+        langs = [l for l in (info.get(key) or {}) if l == "en" or l.startswith("en-")]
+        order = ["en", "en-orig"] if auto else ["en"]
+        for l in order + sorted(langs):
+            if l in langs:
+                return l, auto
+    return None
+
+
 def _fetch_video(vault, url, stage):
-    _run(["yt-dlp", "--skip-download", "--write-info-json", "--write-subs", "--write-auto-subs",
-          "--sub-langs", "en.*,en", "--sub-format", "vtt", "--no-playlist", "-o", str(stage / "video.%(ext)s"), url])
+    out = ["-o", str(stage / "video.%(ext)s"), "--no-playlist"]
+    _run(["yt-dlp", "--skip-download", "--write-info-json", *out, url])
     info_path = next(iter(sorted(stage.glob("*.info.json"))), None)
     info = json.loads(info_path.read_text(encoding="utf-8")) if info_path else {}
+    pick = pick_caption(info)
+    if pick:  # one exact track: asking for a language the video doesn't list gets HTTP 429
+        _run(["yt-dlp", "--skip-download", "--write-auto-subs" if pick[1] else "--write-subs",
+              "--sub-langs", pick[0], "--sub-format", "vtt", *out, url])
     if info_path:
         info_path.write_text(json.dumps({k: v for k, v in info.items() if k not in _INFO_DROP}, indent=1,
                                         ensure_ascii=False), encoding="utf-8")
@@ -573,6 +604,10 @@ def _capture(vault, src, is_url, id=None, type="source", kind=None, obtained_fro
         if got.text is None:
             text, meta = extract.extract(stage / got.main, kind if kind in extract.KINDS else None)
             ek = extract.detect(stage / got.main)
+            if ek == "html" and len(text.strip()) < MIN_TEXT:
+                meta["text_quality"] = "none"
+                warnings.append(f"extracted only {len(text.strip())} characters; the page may need JavaScript or a login: "
+                                f"capture a direct file link, an archive copy, or set depth: empty")
         else:
             text, meta, ek = got.text, got.meta, None
         title = (existing.title if existing else None) or got.title or meta.get("title") or \

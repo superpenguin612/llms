@@ -156,10 +156,37 @@ class TestCaptureWeb(CaptureCase):
     def test_dead_page_without_snapshot(self):
         url = "https://example.com/nowhere"
         api = {"archived_snapshots": {}}
-        with web({url: OSError("no route"), "https://archive.org/*": FakeResp(json.dumps(api), "x")}):
-            with self.assertRaisesRegex(KBError, "no Wayback snapshot"):
+        with web({url: OSError("no route"), "https://archive.org/*": FakeResp(json.dumps(api), "x"),
+                  "https://web.archive.org/cdx/*": FakeResp("[]", "x"), "https://web.archive.org/web/*": 404}):
+            with self.assertRaisesRegex(KBError, "availability API lists none; CDX index lists none"):
                 capture.capture_url(self.v, url)
         self.assertFalse((self.root / "originals").exists() and any((self.root / "originals").iterdir()))
+
+    def test_dead_page_wayback_cdx_fallback(self):
+        url = "https://example.com/gone"
+        raw = "https://web.archive.org/web/20240101000000id_/https://example.com/gone"
+        cdx = [["urlkey", "timestamp", "original"], ["com,example)/gone", "20240101000000", url]]
+        with web({url: 404, "https://archive.org/wayback/available?url=*": 503,
+                  "https://web.archive.org/cdx/*": FakeResp(json.dumps(cdx), "x", ctype="application/json"),
+                  raw: FakeResp(article(), raw)}):
+            rec = capture.capture_url(self.v, url)
+        o = yaml.safe_load((self.root / rec.fm["original"]).parent.joinpath("capture.yaml").read_text())
+        self.assertEqual(o["fetched_url"], raw)
+
+    def test_dead_page_wayback_failure_reason(self):
+        url = "https://example.com/gone"
+        with web({url: 404, "https://archive.org/*": 503, "https://web.archive.org/cdx/*": OSError("boom"),
+                  "https://web.archive.org/web/2id_/*": 404}):
+            with self.assertRaisesRegex(KBError, r"availability API failed.*CDX index failed.*HTTP 404"):
+                capture.capture_url(self.v, url)
+
+    def test_empty_page_warns(self):
+        url = "https://example.com/shell"
+        with web({url: FakeResp("<html><body><p>Sign in</p></body></html>", url)}):
+            rec, change = capture._capture(self.v, url, True, None, "source", None, None)
+        self.assertEqual(rec.fm["text_quality"], "none")
+        self.assertTrue(any("extracted only" in w and "depth: empty" in w for w in change["warnings"]))
+        self.assertTrue((self.root / rec.fm["original"]).is_file())
 
     def test_injection_flag(self):
         url = "https://example.com/evil"
@@ -301,9 +328,13 @@ class TestCaptureRepoVideo(CaptureCase):
             out = Path(cmd[cmd.index("-o") + 1]).parent
             (out / "video.info.json").write_text(json.dumps({
                 "title": "Example Talk", "upload_date": "20250102", "uploader": "Example Channel",
-                "webpage_url": "https://www.youtube.com/watch?v=abc", "formats": [{"url": "https://media/x?ip=1"}]}))
-            (out / "video.en.vtt").write_text("WEBVTT\n\n00:00:01.000 --> 00:00:02.000\nhello there\n")
+                "webpage_url": "https://www.youtube.com/watch?v=abc", "formats": [{"url": "https://media/x?ip=1"}],
+                "subtitles": {"en-US": [{}]}}))
+            if "--sub-langs" in cmd:
+                calls.append(cmd[cmd.index("--sub-langs") + 1])
+                (out / "video.en-US.vtt").write_text("WEBVTT\n\n00:00:01.000 --> 00:00:02.000\nhello there\n")
             return ""
+        calls = []
         with fake_run({"--skip-download": ytdlp}):
             rec = capture.capture_url(self.v, "https://youtu.be/abc")
         self.assertEqual((rec.fm["title"], rec.fm["kind"], str(rec.fm["issued"])), ("Example Talk", "video", "2025-01-02"))
@@ -311,6 +342,15 @@ class TestCaptureRepoVideo(CaptureCase):
         self.assertIn("[00:00:01] hello there", (self.root / rec.fm["text"]).read_text())
         info = json.loads((self.root / rec.fm["original"]).read_text())
         self.assertNotIn("formats", info)
+        self.assertEqual(calls, ["en-US"])  # the listed track, never a made-up language
+
+    def test_pick_caption(self):
+        pick = capture.pick_caption
+        self.assertEqual(pick({"subtitles": {"fr": 1, "en-GB": 1}, "automatic_captions": {"en": 1}}), ("en-GB", False))
+        self.assertEqual(pick({"subtitles": {"en": 1, "en-US": 1}}), ("en", False))
+        self.assertEqual(pick({"automatic_captions": {"en-US": 1, "en-orig": 1, "de": 1}}), ("en-orig", True))
+        self.assertEqual(pick({"automatic_captions": {"en-US": 1}}), ("en-US", True))
+        self.assertIsNone(pick({"subtitles": {"fr": 1}, "automatic_captions": {}}))
 
     def test_missing_tool(self):
         with mock.patch("subprocess.run", side_effect=FileNotFoundError):

@@ -196,7 +196,10 @@ class Link:
 
 
 _WIKILINK = re.compile(r"(!?)\[\[([^\[\]|#\n]*)(?:#([^\[\]|\n]*))?(?:\|([^\[\]\n]*))?\]\]")
-_CODE = re.compile(r"```.*?```|`[^`\n]*`", re.S)
+# fenced blocks (``` or ~~~, optionally indented or in a blockquote; an unclosed fence runs to the end)
+# and inline code spans (any backtick run length, not across a blank line)
+_CODE = re.compile(r"^[ \t>]*(`{3,}|~{3,}).*?(?:^[ \t>]*\1[`~]*[ \t]*$|\Z)|(`+)(?!`)(?:(?!\n\n).)*?(?<!`)\2(?!`)",
+                   re.S | re.M)
 
 
 def parse_links(text: str, skip_code: bool = True) -> list[Link]:

@@ -57,6 +57,11 @@ class TestRecords(VaultTestCase):
         links = parse_links(body)
         self.assertEqual([(l.target, l.anchor, l.embed) for l in links], [("other", "e3", False), ("shot.png", "", True)])
 
+    def test_links_ignore_code(self):
+        body = ("`[[ -n \"$X\" ]]` and ``a [[ b ]]``\n\n```bash\nif [[ -n x ]]; then :; fi\n```\n\n"
+                "~~~\n[[ t ]]\n~~~\n\n> [[ -n bare ]]\n\n> ```\n> [[ q ]]\n> ```\n")
+        self.assertEqual([l.target for l in parse_links(body)], ["-n bare"])
+
     def test_headings_in_code_fences_are_ignored(self):
         body = "## Notes\n```markdown\n## Excerpts\n### e1\n> fake\n```\n\n## Excerpts\n### e1\n> real\n"
         self.assertEqual([e.text for e in parse_excerpts(body)], ["real"])

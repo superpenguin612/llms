@@ -513,14 +513,16 @@ def capture_url(vault, url, id=None, type="source", kind=None, obtained_from=Non
     return _capture(vault, url, True, id, type, kind, obtained_from, set=set)[0]
 
 
-def capture_file(vault, path, id=None, type="source", kind=None, obtained_from=None, set=None) -> Record:
-    return _capture(vault, path, False, id, type, kind, obtained_from, set=set)[0]
+def capture_file(vault, path, id=None, type="source", kind=None, obtained_from=None, set=None, recapture=False) -> Record:
+    return _capture(vault, path, False, id, type, kind, obtained_from, set=set, recapture=recapture)[0]
 
 
-def _capture(vault, src, is_url, id=None, type="source", kind=None, obtained_from=None, watch=False, ref=None, set=None):
+def _capture(vault, src, is_url, id=None, type="source", kind=None, obtained_from=None, watch=False, ref=None, set=None,
+             recapture=False):
     """Returns (record, change). change: {id, card, status: new|unchanged|same-text|changed, capture,
     added, removed, gone, dead, warnings}. ref: capture a repo at that branch/tag/commit as its own card.
-    set: extra front-matter keys, applied before the folder is computed."""
+    set: extra front-matter keys, applied before the folder is computed.
+    recapture: a local file may be added as a new capture of an existing record whose captures differ from it."""
     vault.reload()
     td = vault.profile.type(type)
     existing = vault.get(id) if id else None
@@ -559,6 +561,9 @@ def _capture(vault, src, is_url, id=None, type="source", kind=None, obtained_fro
             td = vault.typedef(existing) or td
             if main_sha in known_shas(vault, existing.id):
                 return _touch(existing, td, warnings, "restored clone" if restored else "unchanged")
+            if not is_url and not recapture:
+                raise KBError(f"id {existing.id} exists with different content; choose another id, "
+                              f"or pass --recapture to add a new capture of the same work")
             if "originals" in existing.fm:
                 raise KBError(f"{existing.rel} uses the old originals format; run `kb migrate originals`, then recapture")
         size = sum(f.stat().st_size for f in stage.iterdir())
@@ -740,6 +745,8 @@ def register(subparsers, common):
     p.add_argument("--type", default="source", help="record type (default: source)")
     p.add_argument("--kind", help="source kind, e.g. webpage, pdf, repo, video (default: inferred)")
     p.add_argument("--obtained-from", help="where the file came from (recorded on the original)")
+    p.add_argument("--recapture", action="store_true",
+                   help="files: allow --id of an existing record whose captures differ, adding a new capture of it")
     p.add_argument("--watch", action="store_true", help="repos: also watch the repo for new commits (kb watch)")
     p.add_argument("--ref", help="repos: capture this branch, tag, pull/N/head or full commit sha as its own card "
                                  "(fetched from origin if the clone lacks it)")
@@ -777,7 +784,7 @@ def run(args) -> int:
             raise KBError("\n".join(errs))
     is_url = bool(re.match(r"(?i)^https?://", args.target)) or bool(args.ref)
     _, change = _capture(v, args.target, is_url, args.id, args.type, args.kind, args.obtained_from, watch=args.watch,
-                         ref=args.ref, set=keys)
+                         ref=args.ref, set=keys, recapture=args.recapture)
     for w in change["warnings"]:
         print(f"kb capture: warning: {w}", file=sys.stderr)
     emit(args, change, describe(change))

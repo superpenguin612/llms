@@ -46,7 +46,8 @@ def zip_bytes(members: dict) -> bytes:
 def fake_capture(calls):
     mod = types.ModuleType("kb.capture")
 
-    def capture_file(vault, path, id=None, type="source", kind=None, obtained_from=None, set=None):
+    def capture_file(vault, path, id=None, type="source", kind=None, obtained_from=None, set=None,
+                     recapture=False):
         calls.append(("file", Path(path).name, obtained_from))
         return types.SimpleNamespace(id=id or "captured-file")
 
@@ -55,6 +56,8 @@ def fake_capture(calls):
         return types.SimpleNamespace(id="src-" + url.rsplit("/", 1)[-1])
 
     mod.capture_file, mod.capture_url = capture_file, capture_url
+    mod.find_by_sha = lambda vault, sha: None
+    return mod
     return mod
 
 
@@ -241,6 +244,19 @@ class TestTriageFlow(VaultTestCase):
         self.assertEqual(st["pending_runs"], [])
         self.assertEqual(st["inbox"], {"bob": 1})
         self.assertEqual(st["held"][0]["question"], "what is this binary?")
+
+    def test_known_file_is_duplicate_not_set(self):
+        r, props = self._scan()
+        pdf = props["inbox/bob/paper.pdf"]
+        pdf["set"] = {"tier": "official"}
+        self._save(r["run"], {pdf["obtained_from"]: pdf})
+        calls, cap = [], fake_capture([])
+        cap.find_by_sha = lambda vault, sha: types.SimpleNamespace(id="old-doc")
+        cap.capture_file = lambda *a, **k: calls.append(1)
+        with mock.patch.dict(sys.modules, {"kb.capture": cap}):
+            res = triage.apply(self.v, r["run"])
+        self.assertEqual((calls, res["counts"]["duplicate-of"]), ([], 1))
+        self.assertIn("duplicate-of\told-doc", (self.root / res["manifest"]).read_text())
 
     def test_set_keys(self):
         r, props = self._scan()

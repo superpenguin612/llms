@@ -246,7 +246,9 @@ class TestCaptureFile(CaptureCase):
         p.write_text("version one of the example\n")
         rec = capture.capture_file(self.v, p, id="doc-a")
         p.write_text("version two of the example\n")
-        capture.capture_file(self.v, p, id="doc-a")
+        with self.assertRaisesRegex(KBError, "exists with different content.*--recapture"):
+            capture.capture_file(self.v, p, id="doc-a")
+        capture.capture_file(self.v, p, id="doc-a", recapture=True)
         self.assertEqual(sorted(x.name for x in (self.root / "originals" / "doc-a").iterdir()), [today(), f"{today()}-2"])
         self.assertTrue((self.root / "text" / "history" / "doc-a" / f"{today()}.md").exists())
 

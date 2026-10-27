@@ -21,7 +21,7 @@ from kb.vault import open_from_args
 ROUTES = ("evidence", "source", "capture", "note", "entity-update", "duplicate", "exclude", "hold")
 FIELDS = ("file", "obtained_from", "sha256", "contributor", "route", "type", "id", "context", "captured",
           "captured_from", "ocr_excerpt", "suggest_links", "sensitive", "title", "description", "phase",
-          "links", "supports", "reason", "question", "set")
+          "links", "supports", "reason", "question", "set", "recapture")
 NEXT_STEP = ("review proposals.jsonl: view each image, fill title/description/phase/links/supports, "
              "then kb triage apply {run}")
 
@@ -632,6 +632,7 @@ def apply(vault, run: str) -> dict:
                       + "\n  ".join(errs))
     ocr_by_sha = _ocr_texts(rdir)
     held = {}
+    created = {d["target"] for d in done.values() if d["disposition"] == "routed"}  # ids this run made
 
     def finish(p, disposition, target):
         src = vault.root / p["file"]
@@ -664,8 +665,14 @@ def apply(vault, run: str) -> dict:
                 continue
             try:
                 if route == "source":
+                    hit = cap.find_by_sha(vault, p["sha256"])
+                    if hit is not None and hit.id not in created:  # known file: never merge `set` into another record
+                        finish(p, "duplicate-of", hit.id)
+                        continue
                     rec = cap.capture_file(vault, vault.root / p["file"], id=p.get("id") or None,
-                                           type=p.get("type") or "source", obtained_from=key, set=p.get("set"))
+                                           type=p.get("type") or "source", obtained_from=key, set=p.get("set"),
+                                           recapture=bool(p.get("recapture")))
+                    created.add(rec.id)
                     finish(p, "routed", rec.id)
                     continue
                 failed = []

@@ -40,6 +40,11 @@ A **vault** is a folder with `kb.yaml` (its profile). It is also an Obsidian vau
 | Lint, deep checks, snapshots | [references/lint.md](references/lint.md) |
 | What to write in summaries, key facts, topics, playbooks; format and style | [references/writing.md](references/writing.md) |
 
+## Bulk work
+
+- Delegate bulk capture, triage review and mining to subagents running a small, fast model at high effort (in Claude Code: Haiku at `xhigh`). Keep the orchestrating session for decisions, review, `kb build` and commits.
+- When several agents share one vault, give each agent its own inbox subtree (`kb triage scan inbox/<who>/<batch>`) and a disjoint list of record ids. Have them check that an id is free before capturing it, and let only the orchestrator commit.
+
 ## Setting up a new vault
 
 **Interview the owner first** ([references/setup.md](references/setup.md)): purpose, scope, consumers, access, sources, types, tiers, tags, events, watching, outputs, layout. The profile and README come from the answers.

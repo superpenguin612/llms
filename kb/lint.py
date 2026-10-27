@@ -254,7 +254,15 @@ class Linter:
             if not e.text:
                 self.err("excerpt", ref, "excerpt has no `>` quote lines; add the quote or mark it Withdrawn:")
                 continue
-            if e.gone:
+            clone = str(rec.fm.get("text") or "")
+            if clone.startswith("clone:") and not e.gone:
+                src = _clone_file(clone, e.location)
+                if src is None:
+                    self.err("excerpt", ref, "repo excerpt needs `Location: <file> L<n>[-<m>] @ <commit>` and the clone "
+                                             "on disk at the path in `text:`")
+                    continue
+                results = [excerpt_in_text(e.text, src)]
+            elif e.gone:
                 results = [excerpt_in_text(e.text, h.read_text(encoding="utf-8", errors="replace")) for h in history]
             elif text is None:
                 self.err("excerpt", ref, f"no text file to check against ({self.v.rel(tp) if tp else 'set `text:`'}); "
@@ -356,3 +364,19 @@ def register(subparsers, common):
     p.add_argument("--deep", action="store_true", help="also print the checklist of checks an agent must do by reading")
     p.add_argument("--strict", action="store_true", help="also fail when generated blocks are stale")
     p.set_defaults(func=run)
+
+
+def _clone_file(clone: str, location: str):
+    """Text of the file named in a repo excerpt's Location (`path L1-2 @ abc123`), read with `git show`
+    at that commit (or the commit in `text: clone:<path>@<commit>`). None if it can't be read."""
+    path, _, commit = clone[len("clone:"):].rpartition("@")
+    m = re.match(r"\s*(\S+)(?:\s+L\d+(?:-\d+)?)?(?:\s*@\s*([0-9a-f]{4,40}))?", location or "")
+    if not m or not path:
+        return None
+    ref = m.group(2) or commit
+    try:
+        out = subprocess.run(["git", "-C", os.path.expanduser(path), "show", f"{ref}:{m.group(1)}"],
+                             capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    return out.stdout if out.returncode == 0 else None

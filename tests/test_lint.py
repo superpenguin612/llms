@@ -89,3 +89,25 @@ class TestOriginalsTree(VaultTestCase):
         rules = {(f.rule, f.path) for f in Linter(open_vault(start=root)).run()}
         self.assertIn(("orphan-original", "originals/stray.bin"), rules)
         self.assertIn(("immutable", "originals/a/2026-01-01/a.txt"), rules)
+
+
+class TestRepoExcerpts(VaultTestCase):
+    def test_repo_excerpts_checked_against_git(self):
+        import subprocess
+        from kb.lint import Linter
+        from kb.vault import open_vault
+        repo = self.tmp / "clone"
+        g = ["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false"]
+        subprocess.run(["git", "init", "-q", str(repo)], check=True)
+        (repo / "README.md").write_text("# Tool\nIt does one careful thing.\n")
+        subprocess.run(g + ["add", "-A"], check=True)
+        subprocess.run(g + ["commit", "-qm", "init"], check=True)
+        sha = subprocess.run(g + ["rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+        body = ("\n## Excerpts\n### e1\n> It does one careful thing.\nLocation: README.md L2 @ " + sha[:7] +
+                "\n\n### e2\n> Not in the file.\nLocation: README.md L3\n")
+        root = make_vault(self.tmp / "v", records={"sources/tool.md": (
+            {"type": "source", "title": "Tool", "kind": "repo", "tier": "primary", "originals": [],
+             "originals_note": "test", "text": f"clone:{repo}@{sha}"}, body)})
+        bad = {(f.rule, f.path) for f in Linter(open_vault(start=root)).run() if f.severity == "error"}
+        self.assertNotIn(("excerpt", "sources/tool.md e1"), bad)
+        self.assertIn(("excerpt", "sources/tool.md e2"), bad)

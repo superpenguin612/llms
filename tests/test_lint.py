@@ -193,9 +193,9 @@ class TestRepoExcerpts(VaultTestCase):
         subprocess.run(g + ["commit", "-qm", "init"], check=True)
         self.sha = subprocess.run(g + ["rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
 
-    def vault(self, text):
-        body = ("\n## Excerpts\n### e1\n> It does one careful thing.\nLocation: README.md L2 @ " + self.sha[:7] +
-                "\n\n### e2\n> Not in the file.\nLocation: README.md L3\n")
+    def vault(self, text, body=None):
+        body = body or ("\n## Excerpts\n### e1\n> It does one careful thing.\nLocation: README.md L2 @ " + self.sha[:7] +
+                        "\n\n### e2\n> Not in the file.\nLocation: README.md L3\n")
         return make_vault(self.tmp / "v", records={"sources/tool.md": (
             {"type": "source", "title": "Tool", "kind": "repo", "tier": "primary", "url": "https://github.com/example/tool",
              "original_note": "test", "text": text}, body)})
@@ -205,6 +205,13 @@ class TestRepoExcerpts(VaultTestCase):
         self.assertNotIn(("error", "excerpt", "sources/tool.md e1"), f)
         self.assertIn(("error", "excerpt", "sources/tool.md e2"), f)
         self.assertFalse([x for x in f if x[1].startswith("clone")])
+
+    def test_several_ranges_are_checked_as_joined_lines(self):
+        loc = f"Location: README.md L1, L2 @ {self.sha[:7]}"
+        body = (f"\n## Excerpts\n### e1\n> # Tool [...] It does one careful thing.\n{loc}\n\n"
+                f"### e2\n> It does one careful thing. [...] # Tool\n{loc}\n")
+        ls = Linter(open_vault(start=self.vault(f"clone:github.com/example/tool@{self.sha}", body))).run()
+        self.assertEqual([(x.severity, x.path) for x in ls if x.rule == "excerpt"], [("error", "sources/tool.md e2")])
 
     def test_old_clone_path_warns(self):
         f = found(self.vault(f"clone:{self.repo}@{self.sha}"))
@@ -222,16 +229,32 @@ class TestRepoExcerpts(VaultTestCase):
 
 
 class TestCloneFileLocation(VaultTestCase):
-    def test_paths_with_spaces(self):
+    def repo(self):
         import subprocess
-        from kb.lint import _clone_file
         repo = self.tmp / "r"
         (repo / "win/Domain Controller").mkdir(parents=True)
-        (repo / "win/Domain Controller/a b.ps1").write_text("hello\n")
+        (repo / "win/Domain Controller/a b.ps1").write_text("".join(f"line {i}\n" for i in range(1, 21)))
         g = lambda *a: subprocess.run(["git", "-C", str(repo), *a], check=True, capture_output=True, text=True).stdout.strip()
         g("init", "-q"); g("add", "."); g("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "x")
-        sha = g("rev-parse", "HEAD")
-        for loc in (f"win/Domain Controller/a b.ps1 L10-20 @ {sha}", f"`win/Domain Controller/a b.ps1` L3 @ {sha}",
-                    f"win/Domain Controller/a b.ps1 @ {sha}"):
-            self.assertEqual(_clone_file(repo, "", loc), "hello\n", loc)
+        return repo, g("rev-parse", "HEAD")
+
+    def test_paths_with_spaces(self):
+        from kb.lint import _clone_file
+        repo, sha = self.repo()
+        for loc, want in ((f"win/Domain Controller/a b.ps1 L10-12 @ {sha}", "line 10\nline 11\nline 12"),
+                          (f"`win/Domain Controller/a b.ps1` L3 @ {sha}", "line 3"),
+                          (f"win/Domain Controller/a b.ps1 @ {sha}", "".join(f"line {i}\n" for i in range(1, 21)))):
+            self.assertEqual(_clone_file(repo, "", loc), want, loc)
         self.assertIsNone(_clone_file(repo, "", f"win/missing.ps1 L1 @ {sha}"))
+
+    def test_several_ranges_join_with_gap(self):
+        from kb.lint import _clone_file
+        from kb.util import excerpt_in_text
+        repo, sha = self.repo()
+        text = _clone_file(repo, "", f"win/Domain Controller/a b.ps1 L2, L4-5 @ {sha}")
+        self.assertEqual(text, "line 2\n[...]\nline 4\nline 5")
+        self.assertEqual(excerpt_in_text("line 2 [...] line 5", text), "exact")
+        self.assertNotEqual(excerpt_in_text("line 2 line 4", text), "exact")  # a gap must be marked
+        self.assertEqual(_clone_file(repo, "", f"win/Domain Controller/a b.ps1 L30 @ {sha}"), "")
+        for bad in ("L5-2", "L0"):
+            self.assertIsNone(_clone_file(repo, "", f"win/Domain Controller/a b.ps1 {bad} @ {sha}"), bad)

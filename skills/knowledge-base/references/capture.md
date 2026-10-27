@@ -49,7 +49,7 @@ kb capture https://youtu.be/…                # video: info + subtitles, no med
   | slides | `slide 7` |
   | video / audio | `00:31:05` |
   | web page with headings | `§"Heading" ¶3`, counting paragraphs and list items under that heading; `§"Heading" list item 2`, `§"Heading" table, row "X"`; text before the first heading is `§top` |
-  | repo files | `path/to/file L40-52 @ abc1234`, or `L7 @ abc1234` for one line. Spaces in the path are fine (`windows/Domain Controller/x.ps1 L10-20 @ abc1234`). Lint checks the quote against `git show abc1234:path/to/file` |
+  | repo files | `path/to/file L40-52 @ abc1234`, or `L7 @ abc1234` for one line. Several ranges: `path/to/file L10-20, L40-55 @ abc1234`; the quote matches those lines joined, with `[...]` between ranges. Spaces in the path are fine (`windows/Domain Controller/x.ps1 L10-20 @ abc1234`). Lint checks the quote against those lines of `git show abc1234:path/to/file` |
   | JSON / code captures | `L20 $.vulnerabilities[0].cve.id`: the line in the extracted text's code block plus a JSON path |
 
 ### Judgment calls

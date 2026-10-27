@@ -330,7 +330,7 @@ class Linter:
                     continue  # clone missing: warned once by check_clone
                 src = _clone_file(clone_path, clone.rpartition("@")[2], e.location)
                 if src is None:
-                    self.err("excerpt", ref, "repo excerpt needs `Location: <file> L<n>[-<m>] @ <commit>` naming a file "
+                    self.err("excerpt", ref, "repo excerpt needs `Location: <file> L<n>[-<m>][, ...] @ <commit>` naming a file "
                                              "at a commit the clone has (git fetch in the clone if it is behind)")
                     continue
                 results = [excerpt_in_text(e.text, src)]
@@ -436,16 +436,28 @@ def register(subparsers, common):
 
 
 def _clone_file(path: Path, commit: str, location: str):
-    """Text of the file named in a repo excerpt's Location (`path L1-2 @ abc123`), read with `git show`
-    at that commit (or the record's pinned commit) in the clone at `path`. None if it can't be read."""
-    # path may contain spaces (or be `backtick-quoted`): parse the ` L<n>[-<m>] @ <sha>` tail from the end
-    m = re.match(r"\s*(?:`([^`]+)`|(.+?))(?:\s+L\d+(?:-\d+)?)?(?:\s*@\s*([0-9a-f]{4,40}))?\s*$", location or "")
+    """Text a repo excerpt's quote is checked against: the file named in its Location (`path L1-2, L5 @ abc123`),
+    read with `git show` at that commit (or the record's pinned commit) in the clone at `path`. With line
+    ranges, only those lines, each range joined by a `[...]` gap as in the quote. None if it can't be read."""
+    # path may contain spaces (or be `backtick-quoted`): parse the ` L<n>[-<m>], ... @ <sha>` tail from the end
+    m = re.match(r"\s*(?:`([^`]+)`|(.+?))(?:\s+(L\d+(?:-\d+)?(?:\s*,\s*L\d+(?:-\d+)?)*))?"
+                 r"(?:\s*@\s*([0-9a-f]{4,40}))?\s*$", location or "")
     if not m:
         return None
-    path_, ref = m.group(1) or m.group(2), m.group(3) or commit
+    path_, ref = m.group(1) or m.group(2), m.group(4) or commit
     try:
         out = subprocess.run(["git", "-C", str(path), "show", f"{ref}:{path_}"],
                              capture_output=True, text=True, timeout=30)
     except (OSError, subprocess.TimeoutExpired):
         return None
-    return out.stdout if out.returncode == 0 else None
+    if out.returncode != 0:
+        return None
+    if not m.group(3):
+        return out.stdout
+    lines, parts = out.stdout.splitlines(), []
+    for r in re.finditer(r"L(\d+)(?:-(\d+))?", m.group(3)):
+        a, b = int(r.group(1)), int(r.group(2) or r.group(1))
+        if not 1 <= a <= b:
+            return None
+        parts.append("\n".join(lines[a - 1:b]))
+    return "\n[...]\n".join(parts)

@@ -36,7 +36,9 @@ class TestBuild(VaultTestCase):
         self.assertEqual(base["filters"]["and"][0], 'note.type == "evidence"')
         self.assertEqual([x["type"] for x in base["views"]], ["table", "cards", "cards"])
         self.assertEqual(base["views"][1]["image"], "note.file")
-        self.assertEqual(base["views"][2]["filters"], {"and": ['file.inFolder("evidence/ctx1")']})
+        root = 'this.file.folder.replace(/views$/, "")'  # works when the vault is nested in another
+        self.assertEqual(base["filters"]["and"][1], f"file.path.startsWith({root})")
+        self.assertEqual(base["views"][2]["filters"], {"and": [f'file.inFolder({root} + "evidence/ctx1")']})
         self.assertFalse(list((self.root / "views").glob("*.md")))  # only live .base views
         agents = (self.root / "AGENTS.md").read_text()
         self.assertIn("| source | sources/ | 1 |", agents)

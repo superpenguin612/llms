@@ -233,6 +233,15 @@ def _view_keys(td, limit: int = 9) -> list:
     return out[:limit]
 
 
+# The vault's path inside whatever Obsidian vault is open: "" normally, "agent-vault/" when the kb
+# vault is nested (e.g. a submodule). Views live in views/, and `this` is the base file when opened.
+_ROOT = 'this.file.folder.replace(/views$/, "")'
+
+
+def _in(folder: str) -> str:
+    return f'file.inFolder({_ROOT} + "{folder}")'
+
+
 def base_view(vault, td) -> dict:
     """An Obsidian Bases definition (https://obsidian.md/help/bases/syntax) for one type."""
     cols = ["file.name", "note.title", "note.description", "note.status"]
@@ -246,12 +255,12 @@ def base_view(vault, td) -> dict:
         for ctx in _contexts(vault):
             folder = td.folder_for(context=ctx).split("{", 1)[0].rstrip("/")
             v = {"type": "cards" if _is_image_type(td) else "table", "name": ctx,
-                 "filters": {"and": [f'file.inFolder("{folder}")']}, "order": cols}
+                 "filters": {"and": [_in(folder)]}, "order": cols}
             if _is_image_type(td):
                 v["image"] = "note.file"
             views.append(v)
-    return {"filters": {"and": [f'note.type == "{td.name}"',
-                                {"not": ['file.inFolder("templates")', 'file.inFolder("views")']}]},
+    return {"filters": {"and": [f'note.type == "{td.name}"', f"file.path.startsWith({_ROOT})",
+                                {"not": [_in("templates"), _in("views")]}]},
             "views": views}
 
 

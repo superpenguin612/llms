@@ -4,6 +4,8 @@ import json
 import os
 from unittest import mock, skipUnless
 
+import yaml
+
 from kb import cli, collect
 from kb.util import today
 from kb.vault import open_vault
@@ -92,7 +94,8 @@ class TestCollect(VaultTestCase):
         v = open_vault(start=self.root)
         [src] = v.of_type("source")
         self.assertEqual(src.fm["entities"], ["[[example-team]]"])
-        self.assertEqual(src.fm["originals"][0]["obtained_from"], "kb collect example-team")
+        m = yaml.safe_load((self.root / src.fm["original"]).parent.joinpath("capture.yaml").read_text())
+        self.assertEqual(m["obtained_from"], "kb collect example-team")
         self.assertEqual(self.note.read_text(), self.entity_text)
 
     def test_errors_reported(self):

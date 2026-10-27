@@ -10,7 +10,7 @@ from kb import build
 from tests.fixtures_kb import quiet_main
 from kb.vault import open_vault
 from tests.fixtures_kb import cd, sample_vault
-from tests.helpers import VaultTestCase
+from tests.helpers import VaultTestCase, make_vault
 
 
 class TestBuild(VaultTestCase):
@@ -88,4 +88,29 @@ class TestBuild(VaultTestCase):
     def test_cli(self):
         cd(self, self.root)
         self.assertEqual(quiet_main("build")[0], 0)
-        self.assertIn("build | example", (self.root / "log.md").read_text())
+        log = self.root / "log.md"
+        self.assertNotIn("| build |", log.read_text() if log.exists() else "")  # builds aren't logged (noise)
+
+
+class TestGeneratedBlocks(VaultTestCase):
+    def test_evidence_table_readme_nav_and_views(self):
+        from kb.records import read_record
+        from kb.vault import open_vault
+        root = make_vault(self.tmp / "v", records={
+            "outputs/finding/f1.md": ({"type": "output", "title": "F1", "kind": "finding"}, "\n# F1\n"),
+            "evidence/lab/s1.md": ({"type": "evidence", "title": "S1", "description": "shows the thing",
+                                    "kind": "screenshot", "context": "lab", "phase": "exploit",
+                                    "contributor": ["alice"], "supports": ["[[f1]]"]}, "\n# S1\n")},
+            files={"README.md": "# v\n\n## Purpose\n<!-- kb:todo --> x\n"})
+        warnings = []
+        build.build(open_vault(start=root), warnings.append)
+        body = read_record(root / "outputs/finding/f1.md").body
+        self.assertIn("| [[s1]] | exploit | shows the thing | alice |", body)
+        readme = (root / "README.md").read_text()
+        self.assertIn("<!-- kb:nav start -->", readme)
+        self.assertIn("[[f1]]", readme)
+        self.assertTrue(any("kb:todo" in w for w in warnings))
+        base = (root / "views/evidence.base").read_text()
+        self.assertNotIn("&id", base)
+        self.assertIn("note.phase", base)
+        self.assertIn("note.supports", base)

@@ -27,7 +27,7 @@
 - **Freeze a repo as it is now** (before an event, say): `kb watch snapshot <id>` saves `git archive` of HEAD as an immutable original.
 
 **Your optional part:**
-1. Read `kb watch events` and the diffs (the mirrors live under `clone_root`).
+1. Read `kb watch events` and the diffs (the mirrors live in the clones root, `~/.local/share/kb/clones/<host>/<owner>/<repo>.git`).
 2. Write a short "what changed" note linking the records. For example, "team X pushed a new module to repo Y that adds Z", with the commit range.
 3. Promote anything important into evidence or a source capture.
 

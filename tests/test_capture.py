@@ -12,6 +12,7 @@ from kb import capture, cli
 from kb.records import parse_excerpts, read_record, split_front_matter
 from kb.util import KBError, sha256_file, today
 from kb.vault import open_vault
+import yaml
 from tests.helpers import VaultTestCase, make_vault
 from tests.test_extract import ARTICLE, HAS, make_pdf
 
@@ -83,11 +84,24 @@ class TestCaptureWeb(CaptureCase):
         self.assertEqual((fm["type"], fm["kind"], fm["url"]), ("source", "webpage", url))
         self.assertTrue(rec.id.startswith("field-notes"))
         self.assertEqual(str(fm["accessed"]), today())
-        main, headers = fm["originals"]
-        self.assertEqual(main["path"], f"originals/{rec.id}/{today()}/index.html")
-        self.assertEqual((main["http_status"], main["via"], main["fetched_url"]), (200, "urllib", url))
-        self.assertEqual(main["sha256"], sha256_file(self.root / main["path"]))
-        self.assertIn("Server: x", (self.root / headers["path"]).read_text())
+        folder = self.root / "originals" / rec.id / today()
+        self.assertEqual(fm["original"], f"originals/{rec.id}/{today()}/index.html")
+        self.assertEqual(fm["sha256"], sha256_file(self.root / fm["original"]))
+        self.assertRegex(fm["captured"], r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$")
+        self.assertNotIn("originals", fm)
+        for k in ("original", "sha256", "captured"):  # Obsidian Properties: flat scalars only
+            self.assertIsInstance(fm[k], str)
+        m = yaml.safe_load((folder / "capture.yaml").read_text())
+        self.assertEqual((m["main"], m["http_status"], m["via"], m["fetched_url"], m["captured"]),
+                         ("index.html", 200, "urllib", url, fm["captured"]))
+        self.assertNotIn("given_url", m)
+        self.assertEqual({f["name"]: f["sha256"] for f in m["files"]},
+                         {n: sha256_file(folder / n) for n in ("index.html", "headers.txt")})
+        self.assertEqual([f["format"] for f in m["files"]], ["headers", "html"])
+        self.assertIn("Server: x", (folder / "headers.txt").read_text())
+        from kb.lint import Linter
+        bad = [f for f in Linter(open_vault(start=self.root)).run() if f.rule in ("manifest", "fixity", "originals")]
+        self.assertEqual(bad, [])
         tfm, body = split_front_matter((self.root / fm["text"]).read_text())
         self.assertEqual((tfm["id"], tfm["anchors"], tfm["capture"]), (rec.id, "headings", f"originals/{rec.id}/{today()}"))
         self.assertEqual(tfm["text_sha256"], fm["text_sha256"])
@@ -124,7 +138,7 @@ class TestCaptureWeb(CaptureCase):
         self.assertIn(f"- {today()}: recaptured; text changed (+", rec2.body)
         self.assertIn("gone: e1", rec2.body)
         self.assertLess(rec2.body.index("## Changes"), rec2.body.index("## Notes"))
-        self.assertEqual(len(rec2.fm["originals"]), 4)
+        self.assertEqual(rec2.fm["original"], f"originals/{rec.id}/{today()}-2/index.html")  # latest capture
 
     def test_dead_page_uses_wayback(self):
         url = "https://example.com/gone"
@@ -134,8 +148,8 @@ class TestCaptureWeb(CaptureCase):
         with web({url: 404, "https://archive.org/wayback/available?url=*": FakeResp(json.dumps(api), "x", ctype="application/json"),
                   raw: FakeResp(article(), raw)}) as m:
             rec = capture.capture_url(self.v, url)
-        o = rec.fm["originals"][0]
-        self.assertEqual((o["fetched_url"], o["via"]), (raw, "wayback (live: HTTP 404)"))
+        o = yaml.safe_load((self.root / rec.fm["original"]).parent.joinpath("capture.yaml").read_text())
+        self.assertEqual((o["fetched_url"], o["via"], o["given_url"]), (raw, "wayback (live: HTTP 404)", url))
         self.assertEqual(rec.fm["url"], url)
         self.assertIn("Wayback", rec.body)
 
@@ -178,11 +192,12 @@ class TestCaptureFile(CaptureCase):
             again = capture.capture_file(self.v, p)
         self.assertEqual((rec.id, rec.fm["kind"], rec.fm["title"]), ("fox-report", "pdf", "Fox Report"))
         self.assertEqual(str(rec.fm["issued"]), "2025-03-01")
-        self.assertEqual(rec.fm["originals"][0]["obtained_from"], "inbox/someone/fox.pdf")
+        m = yaml.safe_load((self.root / rec.fm["original"]).parent.joinpath("capture.yaml").read_text())
+        self.assertEqual(m["obtained_from"], "inbox/someone/fox.pdf")
         self.assertIn("[p1]", (self.root / "text" / "fox-report.md").read_text())
         self.assertIn("[2]", rec.body)  # page needing OCR noted
         self.assertEqual(again.id, rec.id)
-        self.assertEqual(len(again.fm["originals"]), 1)
+        self.assertEqual(len(list((self.root / "originals" / rec.id).iterdir())), 1)
 
     def test_text_file_title_from_filename_and_cap(self):
         p = self.tmp / "Release Plan.txt"
@@ -216,29 +231,37 @@ def fake_run(handlers):
 
 
 class TestCaptureRepoVideo(CaptureCase):
-    def test_repo_needs_clone_root(self):
-        with self.assertRaisesRegex(KBError, "clone_root"):
-            capture.capture_url(self.v, "https://github.com/example/tool")
-
-    def test_repo_capture(self):
-        clones = self.tmp / "clones"
-        root = make_vault(self.tmp / "kb2", overrides={"clone_root": str(clones)})
-        v = open_vault(start=root)
-
+    def repo_git(self, commit="abc123"):
         def clone(cmd):
             dest = Path(cmd[-1])
             (dest / ".git").mkdir(parents=True)
             (dest / "README.md").write_text("# Tool\nAn example tool.\n")
             return ""
-        with fake_run({"clone": clone, "rev-parse": lambda c: "abc123\n", "ls-files": lambda c: "README.md\n",
-                       "log": lambda c: "commit abc123\n", "--version": lambda c: "git version 2.43.0\n"}):
-            rec = capture.capture_url(v, "https://github.com/example/tool.git")
+        return fake_run({"clone": clone, "pull": lambda c: "", "rev-parse": lambda c: commit + "\n",
+                         "ls-files": lambda c: "README.md\n", "log": lambda c: f"commit {commit}\n",
+                         "cat-file": lambda c: "", "--version": lambda c: "git version 2.43.0\n"})
+
+    def test_repo_capture_portable_clone_and_restore(self):
+        clones = self.tmp / "elsewhere"
+        os.environ["KB_CLONES"] = str(clones)  # restored by VaultTestCase
+        with self.repo_git():
+            rec = capture.capture_url(self.v, "https://github.com/example/tool.git")
         self.assertEqual((rec.id, rec.fm["kind"], rec.fm["url"]), ("example-tool", "repo", "https://github.com/example/tool"))
-        self.assertEqual(rec.fm["text"], f"clone:{clones}/example/tool@abc123")
+        self.assertEqual(rec.fm["text"], "clone:github.com/example/tool@abc123")  # no machine path
+        self.assertTrue((clones / "github.com/example/tool/.git").is_dir())
         self.assertEqual(rec.fm["extracted_with"], "git 2.43.0")
-        names = sorted(Path(o["path"]).name for o in rec.fm["originals"])
-        self.assertEqual(names, ["README.md", "commit.txt", "tree.txt"])
-        self.assertFalse((root / "text" / "example-tool.md").exists())
+        self.assertEqual(rec.fm["original"], f"originals/example-tool/{today()}/commit.txt")
+        m = yaml.safe_load((self.root / "originals/example-tool" / today() / "capture.yaml").read_text())
+        self.assertEqual((m["main"], sorted(f["name"] for f in m["files"])), ("commit.txt", ["README.md", "commit.txt", "tree.txt"]))
+        self.assertFalse((self.root / "text" / "example-tool.md").exists())
+        # clone deleted (or a new machine): recapture restores it without a new capture
+        import shutil
+        shutil.rmtree(clones)
+        with self.repo_git():
+            _, change = capture._capture(open_vault(start=self.root), "https://github.com/example/tool", True)
+        self.assertEqual(change["status"], "restored clone")
+        self.assertTrue((clones / "github.com/example/tool/.git").is_dir())
+        self.assertEqual(len(list((self.root / "originals/example-tool").iterdir())), 1)
 
     def test_video_capture(self):
         def ytdlp(cmd):
@@ -253,7 +276,7 @@ class TestCaptureRepoVideo(CaptureCase):
         self.assertEqual((rec.fm["title"], rec.fm["kind"], str(rec.fm["issued"])), ("Example Talk", "video", "2025-01-02"))
         self.assertEqual(rec.fm["author"], ["Example Channel"])
         self.assertIn("[00:00:01] hello there", (self.root / rec.fm["text"]).read_text())
-        info = json.loads((self.root / rec.fm["originals"][0]["path"]).read_text())
+        info = json.loads((self.root / rec.fm["original"]).read_text())
         self.assertNotIn("formats", info)
 
     def test_missing_tool(self):

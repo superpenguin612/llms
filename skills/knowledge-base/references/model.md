@@ -29,7 +29,7 @@ The agent-vault profile instead has `design`, `project`, `session`, `note` and `
 ## Layers
 
 ```
-originals/<id>/<YYYY-MM-DD>/…   exact bytes, one folder per capture, never overwritten
+originals/<id>/<YYYY-MM-DD>/…   exact bytes + kb-written capture.yaml, one folder per capture, never overwritten
 text/<id>.md                    extracted text with anchors: [p12] [slide 7] [00:31:05] [L40]
 text/history/<id>/<date>.md     earlier texts, kept when a recapture changes the text
 <type folder>/<id>.md           the record: front matter + body
@@ -37,7 +37,8 @@ text/history/<id>/<date>.md     earlier texts, kept when a recapture changes the
 views/*.base, views/*.md        generated Obsidian views and catalogues
 inbox/<who>/…                   drop zone; triage empties it
 intake/<date>-<run>.tsv         what happened to every file that came through the inbox
-log.md                          append-only: `## [date] op | ref | detail`
+log.md                          append-only: `## [date] op | ref | detail` (captures, triage, watch, ingest; not lint/build)
+~/.local/share/kb/clones/       repo clones and watch mirrors, shared by all vaults ($KB_CLONES overrides)
 ```
 
 ## Ids, links, citations
@@ -46,3 +47,5 @@ log.md                          append-only: `## [date] op | ref | detail`
 - **Links:** `[[id]]`, `[[id#e3]]`, `[[id#Heading]]`, `[[id|text]]`, and embeds `![[file.png]]`. Front matter links are quoted strings, e.g. `hosts: ["[[web-01]]"]`.
 - **Excerpt numbers are append-only.** A withdrawn excerpt keeps its heading with `Withdrawn: <reason>`. An excerpt missing from a newer capture gets `Gone: <date>` and is still valid against the older text.
 - **Never edit** inside `<!-- kb:NAME start -->` … `<!-- kb:NAME end -->` blocks; `kb build` rewrites them.
+
+A vault made by an older kb (nested `originals:` lists, machine-specific clone paths) is converted with `kb migrate originals --dry-run`, then `kb migrate originals`.

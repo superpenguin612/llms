@@ -14,7 +14,7 @@ class TestInit(VaultTestCase):
         v = init(root, "competition")
         self.assertEqual(v.name, "proj")
         self.assertEqual(yaml.safe_load((root / "kb.yaml").read_text())["name"], "proj")
-        for f in ("AGENTS.md", "Home.md", "log.md", ".obsidian/app.json", ".obsidian/core-plugins.json",
+        for f in ("AGENTS.md", "README.md", "log.md", ".obsidian/app.json", ".obsidian/core-plugins.json",
                   "templates/source.md", "templates/evidence.md"):
             self.assertTrue((root / f).is_file(), f)
         self.assertTrue((root / "entities").is_dir() and (root / "evidence").is_dir())
@@ -23,8 +23,10 @@ class TestInit(VaultTestCase):
         self.assertTrue(json.loads((root / ".obsidian/core-plugins.json").read_text())["bases"])
         self.assertFalse(list(root.rglob("CLAUDE.md")))
         tmpl = (root / "templates/source.md").read_text()
-        self.assertIn("tier:", tmpl)
+        self.assertNotIn("''", tmpl)  # no empty placeholder values
         self.assertIn("## Excerpts", tmpl)
+        self.assertIn("<!-- kb:todo -->", (root / "README.md").read_text())
+        self.assertIn("kb guide", (root / "AGENTS.md").read_text())
         self.assertNotIn("tier:", (root / "templates/note.md").read_text())
         with self.assertRaises(KBError):
             init(root, "generic")

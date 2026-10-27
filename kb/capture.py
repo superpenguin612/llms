@@ -22,6 +22,8 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from kb import __version__, extract, inject, vault as vaultmod
+import yaml
+
 from kb.records import (Record, append_to_section, dump_front_matter, find_section, parse_excerpts,
                         split_front_matter, write_record)
 from kb.util import (KBError, append_log, atomic_write, emit, excerpt_in_text, iso, normalize, now_utc,
@@ -96,7 +98,7 @@ def _fetch_web(vault, url, stage):
         why = f"HTTP {live}" if live else f"network error: {err}"
         if not snap:
             raise KBError(f"{url} is dead ({why}) and has no Wayback snapshot; capture a copy by hand "
-                          f"(kb capture FILE --id ...) or record originals: [] with an originals_note")
+                          f"(kb capture FILE --id ...) or write the card by hand with an original_note saying why")
         r = http_get(snap, limit)
         if r.status >= 400:
             raise KBError(f"{url} is dead ({why}) and its Wayback snapshot returned HTTP {r.status}")
@@ -156,28 +158,27 @@ def _fetch_video(vault, url, stage):
 
 
 def _repo_parts(url):
+    """(host, owner, repo) of a repo URL (https, ssh or scp-style)."""
     m = _REPO.match(url)
     if m:
-        return m.group(2), m.group(3)
-    parts = [p for p in urllib.parse.urlparse(url).path.split("/") if p]
+        return m.group(1), m.group(2), m.group(3)
+    m = re.match(r"^(?:[a-z+]+://)?(?:[^@/]+@)?([^/:]*)[:/]+(.+?)(?:\.git)?/*$", url.strip())
+    parts = [p for p in (m.group(2) if m else "").split("/") if p not in ("", ".", "..")]
     if len(parts) < 2:
         raise KBError(f"can't tell owner/repo from {url}; pass the clone URL")
-    return parts[-2], re.sub(r"\.git$", "", parts[-1])
+    return (m.group(1) or "local").lower(), "/".join(parts[:-1]), parts[-1]
 
 
 def _fetch_repo(vault, url, stage):
-    root_cfg = vault.profile.get("clone_root")
-    if not root_cfg:
-        raise KBError("capturing a repo needs clone_root in kb.yaml (a folder outside the vault for clones), "
-                      "e.g. clone_root: ~/src/clones")
-    owner, name = _repo_parts(url)
-    shown = f"{str(root_cfg).rstrip('/')}/{owner}/{name}"
-    path = vaultmod.expand(shown)
-    if (path / ".git").exists():
-        _run(["git", "-C", str(path), "pull", "--ff-only", "--quiet"])
-    else:
+    host, owner, name = _repo_parts(url)
+    ref = f"{host}/{owner}/{name}"
+    path = clones_root() / ref
+    restored = not (path / ".git").exists()
+    if restored:
         path.parent.mkdir(parents=True, exist_ok=True)
         _run(["git", "clone", "--quiet", url, str(path)])
+    else:
+        _run(["git", "-C", str(path), "pull", "--ff-only", "--quiet"])
     commit = _run(["git", "-C", str(path), "rev-parse", "HEAD"]).strip()
     (stage / "tree.txt").write_text(_run(["git", "-C", str(path), "ls-files"]), encoding="utf-8")
     (stage / "commit.txt").write_text(_run(["git", "-C", str(path), "log", "-1"]), encoding="utf-8")
@@ -190,7 +191,145 @@ def _fetch_repo(vault, url, stage):
     canonical = url if _REPO.match(url) is None else re.sub(r"(\.git)?/?$", "", url)
     return SimpleNamespace(main="commit.txt", fetched_url=url, http_status=None, via="git", final_url=canonical,
                            dead=False, text=readme_text, title=f"{owner}/{name}", kind="repo",
-                           meta={"extracted_with": version, "clone": f"clone:{shown}@{commit}", "commit": commit})
+                           restored=restored, clone_path=path,
+                           meta={"extracted_with": version, "clone": f"clone:{ref}@{commit}", "commit": commit})
+
+
+# --- clones, capture manifests, dedup lookups ---------------------------------------------
+
+def clones_root() -> Path:
+    """Where repo clones and watch mirrors live: $KB_CLONES, else $XDG_DATA_HOME/kb/clones,
+    else ~/.local/share/kb/clones."""
+    if os.environ.get("KB_CLONES"):
+        return vaultmod.expand(os.environ["KB_CLONES"])
+    data = os.environ.get("XDG_DATA_HOME") or "~/.local/share"
+    return vaultmod.expand(data) / "kb" / "clones"
+
+
+def parse_clone(text):
+    """`clone:<ref>@<commit>` -> (path, commit, portable) or None. Portable refs are <host>/<owner>/<repo>
+    under clones_root(); old refs are a machine path (absolute or ~)."""
+    if not isinstance(text, str) or not text.startswith("clone:"):
+        return None
+    ref, _, commit = text[len("clone:"):].rpartition("@")
+    if not ref:
+        ref, commit = commit, ""
+    portable = not ref.startswith(("/", "~"))
+    return (clones_root() / ref if portable else vaultmod.expand(ref)), commit, portable
+
+
+MANIFEST = "capture.yaml"
+AUX_FILES = ("headers.txt", "tree.txt", "commit.txt", MANIFEST)
+
+
+def file_entry(path: Path) -> dict:
+    return {"name": path.name, "sha256": sha256_file(path), "bytes": path.stat().st_size, "format": _format(path.name)}
+
+
+def write_manifest(folder: Path, info: dict, files=None) -> dict:
+    """Write <folder>/capture.yaml: info keys (captured, via, given_url, fetched_url, http_status, obtained_from,
+    main) plus `files` (default: every file in the folder, hashed now)."""
+    if files is None:
+        files = [file_entry(f) for f in sorted(folder.iterdir()) if f.is_file() and f.name != MANIFEST]
+    keys = ("captured", "via", "given_url", "fetched_url", "http_status", "obtained_from", "main")
+    m = {**_drop_none({k: info.get(k) for k in keys}), "files": files}
+    atomic_write(folder / MANIFEST, yaml.safe_dump(m, sort_keys=False, allow_unicode=True, width=1000))
+    return m
+
+
+def read_manifest(folder: Path) -> dict:
+    """Parsed capture.yaml; raises KBError when it is missing or malformed."""
+    p = Path(folder) / MANIFEST
+    try:
+        m = yaml.safe_load(p.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        raise KBError(f"{p.name} missing") from None
+    except yaml.YAMLError as e:
+        raise KBError(f"{p.name} is not valid YAML: {str(e).splitlines()[0]}") from None
+    if not isinstance(m, dict) or not isinstance(m.get("files"), list) or \
+            not all(isinstance(f, dict) and f.get("name") for f in m["files"]):
+        raise KBError(f"{p.name} needs a `files:` list of {{name, sha256, bytes, format}}")
+    return m
+
+
+def capture_dirs(vault):
+    """(id, folder) for every originals/<id>/<date>/ folder."""
+    base = vault.root / "originals"
+    for d in sorted(base.iterdir()) if base.is_dir() else ():
+        if d.is_dir():
+            for c in sorted(d.iterdir(), key=lambda p: _natural(p.name)):
+                if c.is_dir():
+                    yield d.name, c
+
+
+def _natural(name: str):
+    return [int(t) if t.isdigit() else t for t in re.split(r"(\d+)", name)]
+
+
+def _index(vault) -> dict:
+    """{"sha": {sha256: id}, "url": {norm url: id}} from flat front matter and every capture.yaml;
+    cached on the vault for this run (capture adds to it)."""
+    idx = vault.__dict__.get("_kb_capture_index")
+    if idx is None:
+        idx = {"sha": {}, "url": {}}
+        for r in vault.records:
+            if isinstance(r.fm.get("sha256"), str):
+                idx["sha"].setdefault(r.fm["sha256"], r.id)
+        for rid, d in capture_dirs(vault):
+            try:
+                _index_manifest(idx, rid, read_manifest(d))
+            except KBError:
+                continue
+        vault.__dict__["_kb_capture_index"] = idx
+    return idx
+
+
+def _index_manifest(idx, rid, m):
+    for f in m["files"]:
+        if f.get("name") == m.get("main") and f.get("sha256"):
+            idx["sha"].setdefault(f["sha256"], rid)
+    for k in ("fetched_url", "given_url"):
+        if m.get(k):
+            idx["url"].setdefault(vaultmod.norm_url(str(m[k])), rid)
+
+
+def find_by_sha(vault, sha: str):
+    rid = _index(vault)["sha"].get(sha)
+    return (vault.get(rid) if rid else None) or vault.find_by_sha(sha)
+
+
+def find_by_url(vault, url: str):
+    rid = _index(vault)["url"].get(vaultmod.norm_url(url))
+    return vault.find_by_url(url) or (vault.get(rid) if rid else None)
+
+
+def known_shas(vault, rid: str) -> set:
+    """Main-file sha256s of every capture of one record (old nested list included)."""
+    out = {sha for sha, i in _index(vault)["sha"].items() if i == rid}
+    rec = vault.get(rid)
+    if rec is not None:
+        out |= {o.get("sha256") for o in rec.fm.get("originals") or [] if isinstance(o, dict)}
+        if rec.fm.get("sha256"):
+            out.add(rec.fm["sha256"])
+    return out
+
+
+def set_flat(fm: dict, original: str, sha256: str, captured: str) -> None:
+    """Point the record at its latest original (Obsidian-flat keys), dropping the old nested list."""
+    fm.pop("originals", None)
+    fm.pop("originals_note", None)
+    fm.pop("original_note", None)
+    fm.update({"original": original, "sha256": sha256, "captured": captured})
+
+
+def _ensure_commit(path: Path, commit: str, warnings: list) -> None:
+    """Keep a pinned commit available in a clone (fetch it when a fresh clone lacks it)."""
+    if not commit or subprocess.run(["git", "-C", str(path), "cat-file", "-e", f"{commit}^{{commit}}"],
+                                    capture_output=True).returncode == 0:
+        return
+    if subprocess.run(["git", "-C", str(path), "fetch", "--quiet", "origin", commit],
+                      capture_output=True).returncode != 0:
+        warnings.append(f"pinned commit {commit[:12]} is no longer on the remote; repo excerpts at it can't be checked")
 
 
 def _route(url, kind):
@@ -307,7 +446,7 @@ def _capture(vault, src, is_url, id=None, type="source", kind=None, obtained_fro
     td = vault.profile.type(type)
     existing = vault.get(id) if id else None
     if existing is None and is_url:
-        existing = vault.find_by_url(src)
+        existing = find_by_url(vault, src)
     warn_b, max_b = _caps(vault)
     vault.kb_dir.joinpath("tmp").mkdir(exist_ok=True)
     stage = Path(tempfile.mkdtemp(dir=vault.kb_dir / "tmp", prefix="capture-"))
@@ -326,15 +465,20 @@ def _capture(vault, src, is_url, id=None, type="source", kind=None, obtained_fro
             got = SimpleNamespace(main=p.name, fetched_url=None, http_status=None, via="file", final_url=None,
                                   dead=False, text=None, meta=None, title=None, kind=None)
         if existing is None and got.final_url:
-            existing = vault.find_by_url(got.final_url)
+            existing = find_by_url(vault, got.final_url)
         main_sha = sha256_file(stage / got.main)
         if existing is None:
-            existing = vault.find_by_sha(main_sha)
+            existing = find_by_sha(vault, main_sha)
+        restored = getattr(got, "restored", False) and existing is not None
+        if restored:
+            old = parse_clone(existing.fm.get("text"))
+            _ensure_commit(got.clone_path, old[1] if old else "", warnings)
         if existing is not None:
             td = vault.typedef(existing) or td
-            olds = [o for o in existing.fm.get("originals") or [] if isinstance(o, dict)]
-            if any(o.get("sha256") == main_sha for o in olds):
-                return _touch(existing, td, warnings)
+            if main_sha in known_shas(vault, existing.id):
+                return _touch(existing, td, warnings, "restored clone" if restored else "unchanged")
+            if "originals" in existing.fm:
+                raise KBError(f"{existing.rel} uses the old originals format; run `kb migrate originals`, then recapture")
         size = sum(f.stat().st_size for f in stage.iterdir())
         if size > warn_b:
             warnings.append(f"capture is {size / MB:.1f} MB, over caps.warn_mb")
@@ -353,12 +497,12 @@ def _capture(vault, src, is_url, id=None, type="source", kind=None, obtained_fro
         final_dir.parent.mkdir(parents=True, exist_ok=True)
         os.replace(stage, final_dir)
         captured = iso(now_utc())
-        originals = [_drop_none({"path": vault.rel(f), "sha256": sha256_file(f), "bytes": f.stat().st_size,
-                                 "format": _format(f.name), "captured": captured,
-                                 "fetched_url": got.fetched_url if f.name == got.main else None,
-                                 "http_status": got.http_status if f.name == got.main else None,
-                                 "via": got.via, "obtained_from": obtained_from})
-                     for f in sorted(final_dir.iterdir(), key=lambda f: (f.name != got.main, f.name))]
+        manifest = write_manifest(final_dir, {
+            "captured": captured, "via": got.via, "given_url": src if is_url and src != got.fetched_url else None,
+            "fetched_url": got.fetched_url, "http_status": got.http_status, "obtained_from": obtained_from,
+            "main": got.main})
+        _index_manifest(_index(vault), rid, manifest)
+        originals = {"original": vault.rel(final_dir / got.main), "sha256": main_sha, "captured": captured}
         flags = inject.scan(text)
         args = SimpleNamespace(vault=vault, rid=rid, td=td, got=got, text=text, meta=meta, title=title,
                                kind=card_kind, src=src if is_url else None, originals=originals, flags=flags,
@@ -402,7 +546,7 @@ def _create(a):
             fm["given_url"] = a.src
     fm.update(_drop_none({"author": m.get("author"), "issued": _day(m["issued"]) if m.get("issued") else None,
                          "accessed": _day()}))
-    fm["originals"] = a.originals
+    set_flat(fm, **a.originals)
     _text_fields(a, fm)
     if a.td.tracked == "refresh":
         fm["last_checked"] = _day()
@@ -427,7 +571,7 @@ def _create(a):
 def _update(a, rec):
     fm, body, d = rec.fm, rec.body, today()
     change = _change(a, "same-text", rec)
-    fm.setdefault("originals", []).extend(a.originals)
+    set_flat(fm, **a.originals)
     fm["accessed"] = fm["last_checked"] = _day()
     if "clone" in a.meta:
         if fm.get("text") != a.meta["clone"]:
@@ -477,12 +621,12 @@ def _date_dir_named(base: Path, stamp: str) -> Path:
     return p
 
 
-def _touch(rec, td, warnings):
+def _touch(rec, td, warnings, status="unchanged"):
     """Same bytes as an existing original: only bump last_checked."""
     if td.tracked == "refresh" or "last_checked" in rec.fm:
         rec.fm["last_checked"] = _day()
         rec.save()
-    return rec, {"id": rec.id, "card": rec.rel, "status": "unchanged", "capture": None, "added": 0, "removed": 0,
+    return rec, {"id": rec.id, "card": rec.rel, "status": status, "capture": None, "added": 0, "removed": 0,
                  "gone": [], "dead": False, "warnings": warnings}
 
 

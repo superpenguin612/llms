@@ -4,7 +4,10 @@ import json
 import os
 import subprocess
 import urllib.error
+from pathlib import Path
 from unittest import mock
+
+import yaml
 
 from kb import cli, watch
 from kb.notify import connect
@@ -59,7 +62,7 @@ class TestWatch(VaultTestCase):
     def test_git_baseline_then_changes(self):
         v = self.vault([entity("rival", ["git:https://github.com/rival/tool"])])
         fake = FakeGit(f"{A}\trefs/heads/main\n{A}\trefs/tags/v1\n{C}\trefs/tags/v1^{{}}\n",
-                       f"{B}\trefs/heads/main\n{A}\trefs/heads/dev\n")
+                       f"{B}\trefs/heads/main\n{A}\trefs/heads/dev\n", log="one\n")
         with mock.patch("kb.watch.subprocess.run", fake):
             r1 = watch.run(v, alert=False)
             v.reload()
@@ -67,7 +70,7 @@ class TestWatch(VaultTestCase):
         self.assertEqual(r1["records"][0]["baseline"], ["git:https://github.com/rival/tool"])
         self.assertEqual(r1["records"][0]["changes"], [])
         sums = [c["summary"] for c in r2["records"][0]["changes"]]
-        self.assertEqual(sums, ["new branch dev (aaaaaaa)", "main: aaaaaaa → bbbbbbb", "tag v1 deleted (was ccccccc)"])
+        self.assertEqual(sums, ["new branch dev (aaaaaaa)", "main: aaaaaaa → bbbbbbb (1 commit: one)", "tag v1 deleted (was ccccccc)"])
         rec = read_record(v.root / "entities/team/rival.md")
         self.assertIn("last_checked", rec.fm)
         self.assertRegex(rec.body, r"## Timeline\n- \d{4}-\d\d-\d\d \d\d:\d\dZ — new branch dev")
@@ -81,7 +84,8 @@ class TestWatch(VaultTestCase):
             self.assertEqual(watch.run(v, alert=False)["records"], [])
 
     def test_mirror_commits_and_force_push(self):
-        v = self.vault([entity("rival", ["git:git@github.com:rival/tool.git"])], clone_root=str(self.tmp / "mirrors"))
+        os.environ["KB_CLONES"] = str(self.tmp / "mirrors")
+        v = self.vault([entity("rival", ["git:git@github.com:rival/tool.git"])])
         fake = FakeGit(f"{A}\trefs/heads/main\n", f"{B}\trefs/heads/main\n", ancestor=0, log="fix one\nadd two\n")
         with mock.patch("kb.watch.subprocess.run", fake):
             watch.run(v, alert=False)
@@ -161,9 +165,14 @@ class TestWatch(VaultTestCase):
         self.assertEqual(read_record(root / "entities/team/rival.md").fm["watch"], ["github-releases:rival/tool"])
 
     def test_mirror_path(self):
-        self.assertEqual(watch.mirror_path("/m", "https://github.com/o/r.git").as_posix(), "/m/github.com/o/r.git")
-        self.assertEqual(watch.mirror_path("/m", "git@gitlab.com:g/s/r").as_posix(), "/m/gitlab.com/g/s/r.git")
-        self.assertEqual(watch.mirror_path("/m", "file:///srv/../r").as_posix(), "/m/local/srv/r.git")
+        os.environ["KB_CLONES"] = "/m"
+        self.assertEqual(watch.mirror_path("https://github.com/o/r.git").as_posix(), "/m/github.com/o/r.git")
+        self.assertEqual(watch.mirror_path("git@gitlab.com:g/s/r").as_posix(), "/m/gitlab.com/g/s/r.git")
+        self.assertEqual(watch.mirror_path("file:///srv/../r").as_posix(), "/m/local/srv/r.git")
+        os.environ.pop("KB_CLONES")
+        os.environ["XDG_DATA_HOME"] = "/xdg"
+        self.addCleanup(os.environ.pop, "XDG_DATA_HOME", None)
+        self.assertEqual(watch.mirror_path("https://github.com/o/r").as_posix(), "/xdg/kb/clones/github.com/o/r.git")
 
 
 class TestWatchSnapshot(VaultTestCase):
@@ -184,16 +193,17 @@ class TestWatchSnapshot(VaultTestCase):
         url = src.as_uri()
         root = make_vault(self.tmp / "v", records=dict([entity("rival", [f"git:{url}"])]))
         v = open_vault(start=root)
-        with self.assertRaisesRegex(Exception, "clone_root"):
-            watch.snapshot(v, "rival")
-        root = make_vault(self.tmp / "v", overrides={"clone_root": str(self.tmp / "mirrors")})
-        v = open_vault(start=root)
         res = watch.snapshot(v, "rival")
         self.assertTrue(res["new"])
+        self.assertTrue((self.tmp / "clones/local").is_dir())  # mirror under KB_CLONES
         rec = read_record(root / "entities/team/rival.md")
-        o = rec.fm["originals"][0]
-        self.assertEqual(o["obtained_from"], f"{url}@{res['sha']}")
-        self.assertTrue((root / o["path"]).stat().st_size == o["bytes"])
-        self.assertRegex(o["path"], r"^originals/rival/\d{4}-\d\d-\d\d/repo-[0-9a-f]{7}\.tar\.gz$")
+        self.assertNotIn("original", rec.fm)  # entity isn't original: immutable: folder + manifest only
+        self.assertRegex(res["path"], r"^originals/rival/\d{4}-\d\d-\d\d/repo-[0-9a-f]{7}\.tar\.gz$")
+        m = yaml.safe_load((root / res["path"]).parent.joinpath("capture.yaml").read_text())
+        self.assertEqual((m["obtained_from"], m["via"], m["main"]), (f"{url}@{res['sha']}", "git archive", Path(res["path"]).name))
+        self.assertEqual(m["files"][0]["bytes"], (root / res["path"]).stat().st_size)
         v.reload()
         self.assertFalse(watch.snapshot(v, "rival")["new"])
+        from kb.lint import Linter
+        bad = [f for f in Linter(open_vault(start=root)).run() if f.rule in ("manifest", "orphan-original", "fixity")]
+        self.assertEqual(bad, [])

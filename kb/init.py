@@ -15,25 +15,24 @@ import yaml
 
 
 def note_template(vault, td) -> str:
-    """An Obsidian template (templates/<type>.md) with the keys this type's traits need."""
-    fm = {"type": td.name, "title": "{{title}}", "description": "", "status": "active", "tags": []}
-    for k in td.required:
-        fm.setdefault(k, "")
-    if td.origin == "external":
-        if vault.profile.tiers:
-            fm["tier"] = ""
-        fm.update({"author": [], "url": "", "accessed": "{{date}}"})
-    else:
+    """An Obsidian template (templates/<type>.md): only keys with real defaults. Unknown keys stay out
+    (kb's rule), so lint reports what still needs filling in."""
+    fm = {"type": td.name, "title": "{{title}}", "status": "active"}
+    if td.origin == "internal":
         fm["updated"] = "{{date}}"
-    if td.original == "immutable":
-        fm.update({"originals": [], "originals_note": ""})
     if td.tracked == "refresh":
         fm["refresh"] = td.refresh
     if td.tracked == "watch":
-        fm.update({"watch": [], "watch_every": td.watch_every})
-    sections = ["Summary", "Key facts", "Excerpts", "Notes"] if td.quotes == "verbatim" else ["Notes"]
+        fm["watch_every"] = td.watch_every
+    sections = ["Summary", "Key facts", "Excerpts", "Notes"] if td.quotes == "verbatim" else ["Summary", "Notes"]
     body = "\n# {{title}}\n\n" + "\n\n".join(f"## {s}\n" for s in sections)
     return dump_front_matter(fm) + body
+
+
+def readme_text(vault) -> str:
+    tmpl = (TEMPLATES / "readme.md").read_text(encoding="utf-8")
+    desc = str(vault.profile.get("description") or "").strip()
+    return tmpl.replace("{name}", vault.name).replace("{description}", desc)
 
 
 def init(target, profile: str = "generic", name: str | None = None) -> Vault:
@@ -58,10 +57,9 @@ def init(target, profile: str = "generic", name: str | None = None) -> Vault:
         (root / d).mkdir(exist_ok=True)
 
     build.write_agents(v)
-    if not (root / "Home.md").exists():
-        desc = v.profile.get("description") or ""
-        atomic_write(root / "Home.md", f"# {name}\n\n{desc}\n\nHow this vault works: [[AGENTS]]. "
-                                       f"Catalogues and Bases views are in `views/` after `kb build`.\n")
+    if not (root / "README.md").exists():
+        atomic_write(root / "README.md", readme_text(v))
+    build.write_readme_nav(v)
     gi = root / ".gitignore"
     old = gi.read_text(encoding="utf-8") if gi.exists() else ""
     if ".kb/" not in old.split():
@@ -78,7 +76,8 @@ def init(target, profile: str = "generic", name: str | None = None) -> Vault:
 def run(args) -> int:
     v = init(args.dir, args.profile, args.name)
     emit(args, {"root": str(v.root), "name": v.name, "types": sorted(v.profile.types)},
-         f"initialized vault {v.name!r} at {v.root} ({len(v.profile.types)} types); next: edit kb.yaml, then `kb build`")
+         f"initialized vault {v.name!r} at {v.root} ({len(v.profile.types)} types); next: edit kb.yaml, "
+         f"write README.md (purpose, scope, consumers), then `kb build`")
     return 0
 
 

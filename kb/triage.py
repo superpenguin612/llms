@@ -12,7 +12,7 @@ import zipfile
 from collections import Counter
 from pathlib import Path, PurePosixPath
 
-from kb import ocr, secrets
+from kb import capture, ocr, secrets
 from kb.records import dump_front_matter, split_front_matter, write_record
 from kb.util import KBError, append_log, atomic_write, emit, iso, now_utc, sha256_file, slugify, today
 from kb.vault import open_from_args
@@ -310,8 +310,8 @@ def scan(vault, context: str | None = None) -> dict:
     ev_type = _pick_type(vault, "evidence", role="input", origin="internal")
     note_type = _pick_type(vault, "note", role="synthesis", origin="internal")
     src_type = _pick_type(vault, "source", origin="external")
-    known = {}
-    for r in vault.records:
+    known = dict(capture._index(vault)["sha"])  # flat sha256 + every capture.yaml main file
+    for r in vault.records:  # old nested format, until `kb migrate originals`
         for o in r.fm.get("originals") or []:
             if isinstance(o, dict) and o.get("sha256"):
                 known.setdefault(o["sha256"], r.id)
@@ -510,12 +510,11 @@ def _apply_evidence(vault, p, ocr_text: str) -> str:
           "captured": p.get("captured") or None, "captured_from": p.get("captured_from") or None,
           "obtained_from": p.get("obtained_from") or None, "phase": p.get("phase") or None,
           "file": f"[[{name}]]",
-          "originals": [{"path": vault.rel(dest), "sha256": p["sha256"], "bytes": dest.stat().st_size,
-                         "format": ext.lstrip(".") or "bin", "captured": p.get("captured") or today(),
-                         "obtained_from": p.get("obtained_from") or p["file"]}],
+          "original": vault.rel(dest), "sha256": p["sha256"], "bytes": dest.stat().st_size,
+          "format": ext.lstrip(".") or "bin",
           "hosts": hosts or None, "entities": entities or None,
           "supports": [_wikilink(s) for s in p.get("supports") or []] or None,
-          "sensitive": p.get("sensitive") or None, "updated": today()}
+          "sensitive": p.get("sensitive") or None, "updated": dt.date.fromisoformat(today())}
     if kind == "image":
         fm["ocr_quality"] = "good" if len(ocr_text.split()) >= 5 else ("partial" if ocr_text.strip() else "none")
     fm = {k: v for k, v in fm.items() if v is not None}

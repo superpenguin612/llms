@@ -9,7 +9,7 @@ from kb.util import KBError
 
 # Command modules, in help order. A module that doesn't exist yet is skipped.
 MODULES = ["init", "lint", "build", "query", "capture", "refresh", "collect", "triage", "queue",
-           "watch", "snapshot", "registry", "sessions"]
+           "watch", "snapshot", "registry", "sessions", "migrate"]
 
 
 def build_parser() -> argparse.ArgumentParser:

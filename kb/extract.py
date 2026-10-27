@@ -31,7 +31,6 @@ ALIASES = {"webpage": "html", "blog-post": "html", "slides": "office", "office-d
            "spreadsheet": "office", "video": "subtitles", "podcast": "subtitles"}
 INSTALL = {"trafilatura": "pip install trafilatura", "pymupdf": "pip install pymupdf",
            "markitdown": "pip install 'markitdown[pptx,docx,xlsx]'"}
-CODE_EVERY = 50
 PARA_SECONDS = 45
 
 
@@ -198,18 +197,18 @@ def _text(path):
 
 
 def _code(path):
+    """One fenced block for the whole file: line N inside the fence is line N of the original
+    (pretty-printed for JSON), which is what `Location: L40-52` refers to."""
     raw = _read_text(path)
-    if path.suffix.lower() == ".json" or raw.lstrip()[:1] in ("{", "["):
+    lang = path.suffix.lower().lstrip(".")
+    if lang == "json" or raw.lstrip()[:1] in ("{", "["):
         try:  # pretty-print so JSON (API captures) can be quoted line by line
             raw = json.dumps(json.loads(raw), indent=2, ensure_ascii=False)
+            lang = "json"
         except ValueError:
             pass
-    lines = raw.split("\n")
-    parts = []
-    for i in range(0, len(lines), CODE_EVERY):
-        # bare fences: no H1s from '#' comments, and the markers vanish under util.normalize
-        parts.append(f"[L{i + 1}]\n```\n" + "\n".join(lines[i:i + CODE_EVERY]) + "\n```\n")
-    return "\n".join(parts), {"extracted_with": "kb", "anchors": "lines"}
+    fence = "`" * max(3, max((len(m) for m in re.findall(r"`{3,}", raw)), default=0) + 1)
+    return f"{fence}{lang}\n{raw.rstrip()}\n{fence}\n", {"extracted_with": "kb", "anchors": "lines"}
 
 
 _TS = re.compile(r"(?:(\d+):)?(\d{1,2}):(\d{2})[.,](\d{1,3})\s*-->")

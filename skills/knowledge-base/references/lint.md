@@ -16,7 +16,7 @@ printf '#!/bin/sh\ncd "$(git rev-parse --show-toplevel)/knowledge-base" 2>/dev/n
 - **Links and quotes:**
   - an unresolved wikilink or `#eN`;
   - an excerpt not found verbatim in its text.
-- **Originals:** missing, or a hash mismatch.
+- **Originals:** missing, a hash mismatch, a capture folder without a valid `capture.yaml`, a file not listed in its folder's manifest, an old-format `originals:` list (run `kb migrate originals`).
 - **Origin:** an internal record with a `tier`, or an external one without one.
 - **Vault-level:**
   - a `CLAUDE.md` in the vault;
@@ -29,7 +29,10 @@ printf '#!/bin/sh\ncd "$(git rev-parse --show-toplevel)/knowledge-base" 2>/dev/n
 - stale inbox files;
 - large files;
 - cited-claims records that link to nothing;
-- overdue refresh or watch.
+- overdue refresh or watch;
+- a repo clone missing on this machine (restore with `kb capture <url>`), or a leftover `clone_root` profile key.
+
+Lint and build don't write to `log.md`.
 
 **Fixing:**
 - **"excerpt not found":** copy the passage again from `kb show <id> --text`. Never edit the text file to make a quote match.

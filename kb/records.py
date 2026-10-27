@@ -25,8 +25,31 @@ def split_front_matter(text: str):
     return fm, text[m.end():]
 
 
+# Front matter is written in a fixed order: what a reader needs first, tool metadata last.
+FIRST_KEYS = ("type", "title", "description", "status", "superseded_by", "tier", "kind", "aliases", "tags")
+LAST_KEYS = ("original", "sha256", "bytes", "format", "captured", "captured_from", "obtained_from", "original_note",
+             "originals", "originals_note", "text", "text_sha256", "text_quality", "extracted_with",
+             "last_checked", "mined_by", "mined_on", "updated")
+
+
+def ordered(fm: dict) -> dict:
+    first = [k for k in FIRST_KEYS if k in fm]
+    last = [k for k in LAST_KEYS if k in fm]
+    middle = [k for k in fm if k not in first and k not in last]
+    return {k: fm[k] for k in first + middle + last}
+
+
+class _Dumper(yaml.SafeDumper):
+    def ignore_aliases(self, data):  # never emit &anchors / *aliases
+        return True
+
+
+def dump_yaml(data) -> str:
+    return yaml.dump(data, Dumper=_Dumper, sort_keys=False, allow_unicode=True, width=1000)
+
+
 def dump_front_matter(fm: dict) -> str:
-    return "---\n" + yaml.safe_dump(fm, sort_keys=False, allow_unicode=True, width=1000) + "---\n"
+    return "---\n" + dump_yaml(ordered(fm)) + "---\n"
 
 
 @dataclass

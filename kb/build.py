@@ -12,8 +12,8 @@ import yaml
 
 from kb import vault as vaultmod
 from kb.profile import TEMPLATES
-from kb.records import (dump_front_matter, links_in_value, parse_excerpts, parse_links, replace_block,
-                        split_front_matter, without_section)
+from kb.records import (dump_front_matter, dump_yaml, get_block, link_target_name, links_in_value, parse_excerpts,
+                        parse_links, replace_block, split_front_matter, without_section)
 from kb.util import KBError, append_log, atomic_write, emit, parse_time
 
 INDEX_SCHEMA = "1"
@@ -215,12 +215,29 @@ def _contexts(vault) -> list:
             if (c.get("id") if isinstance(c, dict) else c)]
 
 
+# Columns after the type's required keys: status-like keys, then links, then the rest. Capped at 9.
+VIEW_FIRST = ("phase", "severity", "finding_status", "context", "depth", "tool", "owner")
+VIEW_LATER = ("sensitive", "captured", "contributor", "issued", "author", "last_checked", "started", "repo")
+
+
+def _view_keys(td, limit: int = 9) -> list:
+    keys = [k for k in td.required if k in td.keys]
+    keys += [k for k in VIEW_FIRST if k in td.keys]
+    keys += [k for k, spec in td.keys.items() if spec in ("link", "links")]
+    keys += [k for k in VIEW_LATER if k in td.keys]
+    out = []
+    for k in keys:
+        if k not in out and k not in ("file", "text"):
+            out.append(k)
+    return out[:limit]
+
+
 def base_view(vault, td) -> dict:
     """An Obsidian Bases definition (https://obsidian.md/help/bases/syntax) for one type."""
     cols = ["file.name", "note.title", "note.description", "note.status"]
     if td.origin == "external" and vault.profile.tiers:
         cols.append("note.tier")
-    cols += [f"note.{k}" for k in td.keys if k not in ("file", "text") and f"note.{k}" not in cols][:6]
+    cols += [f"note.{k}" for k in _view_keys(td) if f"note.{k}" not in cols]
     views = [{"type": "table", "name": td.name, "order": cols}]
     if _is_image_type(td):
         views.append({"type": "cards", "name": f"{td.name} cards", "order": cols[:3], "image": "note.file"})
@@ -254,7 +271,7 @@ def catalogue(vault, td) -> str:
 def write_views(vault) -> list:
     out = []
     for td in vault.profile.types.values():
-        for name, text in ((f"{td.name}.base", yaml.safe_dump(base_view(vault, td), sort_keys=False, allow_unicode=True)),
+        for name, text in ((f"{td.name}.base", dump_yaml(base_view(vault, td))),
                            (f"{td.name}.md", catalogue(vault, td))):
             p = vault.root / "views" / name
             if not p.exists() or p.read_text(encoding="utf-8") != text:
@@ -275,7 +292,8 @@ def agents_block(vault) -> str:
         traits += [f"{t}: {getattr(td, t)}" for t, d in _DEFAULT_TRAITS.items() if getattr(td, t) != d]
         rows.append(f"| {td.name} | {td.folder}/ | {len(vault.of_type(td.name))} | {', '.join(traits)} |")
     tmpl = (TEMPLATES / "agents-block.md").read_text(encoding="utf-8")
-    return tmpl.replace("{name}", vault.name).replace("{routing}", "\n".join(rows)).strip()
+    desc = str(vault.profile.get("description") or "").strip()
+    return tmpl.replace("{name}", vault.name).replace("{description}", desc).replace("{routing}", "\n".join(rows)).strip()
 
 
 def write_agents(vault) -> bool:
@@ -289,10 +307,79 @@ def write_agents(vault) -> bool:
 
 # --- command ------------------------------------------------------------------------------
 
+# --- generated blocks in records -------------------------------------------------------------
+
+def evidence_table(vault, rec) -> str | None:
+    """Rows for every record whose `supports` links to rec (spec: outputs show their evidence)."""
+    rows = []
+    for r in vault.records:
+        targets = {link_target_name(l.target).casefold() for l in links_in_value(r.fm.get("supports"))}
+        if rec.id.casefold() in targets:
+            who = ", ".join(map(str, r.fm.get("contributor") or r.fm.get("author") or [])) if isinstance(
+                r.fm.get("contributor") or r.fm.get("author"), list) else _scalar(r.fm.get("contributor") or "")
+            rows.append(f"| [[{r.id}]] | {_cell(r.fm.get('phase') or '')} | {_cell(r.fm.get('description') or r.title)} "
+                        f"| {_cell(who)} |")
+    if not rows:
+        return None
+    return "\n".join(["## Evidence (generated)", "", "| evidence | phase | shows | by |", "|---|---|---|---|", *sorted(rows)])
+
+
+def write_record_blocks(vault) -> int:
+    changed = 0
+    for rec in vault.records:
+        td = vault.typedef(rec)
+        if not td or td.role != "output":
+            continue
+        table = evidence_table(vault, rec)
+        if table is None and get_block(rec.body, "evidence") is None:
+            continue
+        body = replace_block(rec.body, "evidence", table or "No evidence links to this record yet.")
+        if body != rec.body:
+            rec.body = body
+            rec.save()
+            changed += 1
+    return changed
+
+
+# --- README (the vault's purpose doc) navigation block ------------------------------------------
+
+def nav_block(vault) -> str:
+    lines = ["## Contents (generated)", ""]
+    for td in vault.profile.types.values():
+        n = len(vault.of_type(td.name))
+        lines.append(f"- **{td.name}** ({n}): [[{td.name}.base|table]] · [[views/{td.name}|catalogue]]")
+    for role, label in (("synthesis", "Notes"), ("output", "Outputs")):
+        recs = sorted((r for r in vault.records if (vault.typedef(r) and vault.typedef(r).role == role
+                       and vault.typedef(r).origin == "internal" and vault.typedef(r).tracked != "watch")),
+                      key=lambda r: r.id)
+        if recs:
+            lines += ["", f"**{label}:**"] + [f"- [[{r.id}]] — {_scalar(r.fm.get('description') or r.title)}" for r in recs]
+    return "\n".join(lines)
+
+
+def write_readme_nav(vault, warn=None) -> bool:
+    p = vault.root / "README.md"
+    if not p.exists():
+        if warn:
+            warn("README.md is missing: write the vault's purpose doc (`kb init` creates a template)")
+        return False
+    old = p.read_text(encoding="utf-8")
+    if warn and "<!-- kb:todo -->" in old:
+        warn("README.md still has <!-- kb:todo --> placeholders: fill in the purpose, scope and consumers")
+    new = replace_block(old, "nav", nav_block(vault))
+    if new != old:
+        atomic_write(p, new)
+    return new != old
+
+
 def build(vault, warn=None) -> dict:
-    stats = build_index(vault, warn)
+    stats = {"blocks": write_record_blocks(vault)}
+    if stats["blocks"]:
+        vault.reload()
+    stats.update(build_index(vault, warn))
     stats["views"] = write_views(vault)
     stats["agents_updated"] = write_agents(vault)
+    stats["readme_updated"] = write_readme_nav(vault, warn)
     return stats
 
 
@@ -304,7 +391,6 @@ def run(args) -> int:
     for w in warnings:
         print(f"warning: {w}", file=sys.stderr)
     detail = f"{stats['records']} records, {stats['excerpts']} excerpts, {stats['repo_docs']} repo docs"
-    append_log(v.root, "build", v.name, detail)
     emit(args, stats, f"built {db_path(v).relative_to(v.root)}: {detail}; {len(stats['views'])} view files")
     return 0
 

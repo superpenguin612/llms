@@ -9,7 +9,7 @@ from unittest import mock
 
 from kb import triage
 from kb.records import read_record
-from kb.util import KBError
+from kb.util import KBError, sha256_bytes
 from kb.vault import open_vault
 from tests.helpers import VaultTestCase, make_vault
 
@@ -113,9 +113,8 @@ class TestTriageFlow(VaultTestCase):
                 "entities/host/web-01.md": ({"type": "entity", "title": "web-01", "kind": "host",
                                              "handles": ["ip:192.0.2.10", "hostname:web-01"]}, "\n"),
                 "evidence/ctx1/old-shot.md": ({"type": "evidence", "title": "Old", "kind": "screenshot",
-                                               "context": "ctx1", "originals": [
-                                                   {"path": "evidence/ctx1/old-shot.png",
-                                                    "sha256": sha256_bytes(stored)}]}, "\n"),
+                                               "context": "ctx1", "original": "evidence/ctx1/old-shot.png",
+                                               "sha256": sha256_bytes(stored)}, "\n"),
             },
             files={
                 "evidence/ctx1/old-shot.png": stored,
@@ -190,7 +189,12 @@ class TestTriageFlow(VaultTestCase):
                          ("evidence", "screenshot", "[[ctx1-alice-0001.png]]", ["alice"], "recon"))
         self.assertEqual(fm["hosts"], ["[[web-01]]"])
         self.assertEqual(fm["supports"], ["[[finding-x]]"])
-        self.assertEqual(fm["originals"][0]["path"], "evidence/ctx1/ctx1-alice-0001.png")
+        self.assertEqual((fm["original"], fm["sha256"], fm["format"]),
+                         ("evidence/ctx1/ctx1-alice-0001.png", sha256_bytes(self.shot), "png"))
+        self.assertEqual(fm["bytes"], len(self.shot))
+        self.assertNotIn("originals", fm)
+        self.assertEqual((fm["captured"], fm["captured_from"]), ("2026-10-24T21:14:05", "filename"))  # no tz known: no Z
+        self.assertIn("\nupdated: 20", (ev / "ctx1-alice-0001.md").read_text())  # a YAML date, not a quoted string
         self.assertEqual(fm["sensitive"], ["secrets"])
         self.assertIn("![[ctx1-alice-0001.png]]", rec.body)
         self.assertIn("> [!quote]- OCR\n> root@attacker", rec.body)

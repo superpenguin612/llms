@@ -57,11 +57,13 @@ class TestExtract(VaultTestCase):
         self.assertIn("[p2]\nscanned words here", text)
         self.assertEqual((meta["text_quality"], meta["ocr_pages"]), ("mixed", [2]))
 
-    def test_code_line_anchors(self):
+    def test_code_single_block(self):
         p = self.tmp / "tool.py"
         p.write_text("\n".join(f"# line {i}" for i in range(1, 121)))
         text, meta = extract.extract(p)
-        self.assertEqual(re.findall(r"(?m)^\[L\d+\]$", text), ["[L1]", "[L51]", "[L101]"])
+        lines = text.splitlines()
+        self.assertEqual((lines[0], lines[-1]), ("```py", "```"))  # one block; line N = lines[N]
+        self.assertEqual(lines[51], "# line 51")
         self.assertEqual(meta["anchors"], "lines")
         self.assertEqual(excerpt_in_text("# line 51", text), "exact")
         outside = re.sub(r"(?s)```.*?```", "", text)

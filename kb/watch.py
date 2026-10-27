@@ -12,10 +12,10 @@ import urllib.request
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
-from kb import notify as notify_mod
+from kb import capture, notify as notify_mod
 from kb.records import append_to_section
 from kb.util import KBError, append_log, emit, iso, is_due, now_utc, parse_time, sha256_bytes, sha256_file, today
-from kb.vault import expand, open_from_args
+from kb.vault import open_from_args
 
 KINDS = ("git", "github-user", "github-releases", "page", "feed")
 UA = "kb-watch (+https://github.com/superpenguin612/llms)"
@@ -57,21 +57,15 @@ def _gh(vault, path):
         raise KBError(f"GitHub API {path}: HTTP {e.code}") from None
 
 
-def mirror_path(clone_root, url: str) -> Path:
-    """<clone_root>/<host>/<owner>/<repo>.git for https, ssh and scp-style URLs."""
-    m = re.match(r"^(?:[a-z+]+://)?(?:[^@/]+@)?([^/:]*)[:/]+(.+?)(?:\.git)?/*$", url.strip())
-    if not m:
-        raise KBError(f"can't derive a mirror path from {url!r}")
-    parts = [p for p in m.group(2).split("/") if p not in ("", ".", "..")]
-    return expand(clone_root) / (m.group(1) or "local") / Path(*parts[:-1]) / f"{parts[-1]}.git"
+def mirror_path(url: str) -> Path:
+    """<clones root>/<host>/<owner>/<repo>.git for https, ssh and scp-style URLs."""
+    host, owner, repo = capture._repo_parts(url)
+    return capture.clones_root() / host / owner / f"{repo}.git"
 
 
-def fetch_mirror(vault, url) -> Path | None:
-    """Clone or fetch a bare mirror under clone_root; None when clone_root isn't set."""
-    root = vault.profile.get("clone_root")
-    if not root:
-        return None
-    path = mirror_path(root, url)
+def fetch_mirror(vault, url) -> Path:
+    """Clone or fetch a bare mirror under the clones root (see kb.capture.clones_root)."""
+    path = mirror_path(url)
     if (path / "HEAD").exists():
         _git("fetch", "--prune", "--quiet", "origin", cwd=path, timeout=600)
     else:
@@ -364,26 +358,33 @@ def snapshot(vault, rid):
     urls = [v for k, v in map(parse_target, rec.fm.get("watch") or []) if k == "git"]
     if not urls:
         raise KBError(f"{rec.id} has no git: watch target; add one with `kb watch add {rec.id} git:<url>`")
-    if not vault.profile.get("clone_root"):
-        raise KBError("snapshots need a local mirror: set clone_root in kb.yaml (e.g. clone_root: ~/src/mirrors)")
     url = urls[0]
     mirror = fetch_mirror(vault, url)
     sha = _git("rev-parse", "HEAD^{commit}", cwd=mirror).stdout.strip()
-    rel = f"originals/{rec.id}/{today()}/repo-{sha[:7]}.tar.gz"
-    dest = vault.root / rel
-    if dest.exists():
-        return {"id": rec.id, "path": rel, "sha": sha, "new": False}
-    dest.parent.mkdir(parents=True, exist_ok=True)
+    name = f"repo-{sha[:7]}.tar.gz"
+    for rid_, d in capture.capture_dirs(vault):
+        if rid_ == rec.id and (d / name).is_file():
+            return {"id": rec.id, "path": vault.rel(d / name), "sha": sha, "new": False}
+    folder = capture._date_dir(vault.root / "originals" / rec.id)
+    folder.mkdir(parents=True)
+    dest = folder / name
     tmp = dest.with_name(f".{dest.name}.tmp")
     try:
         _git("archive", "--format=tar.gz", "-o", str(tmp), sha, cwd=mirror, timeout=600)
         os.replace(tmp, dest)
-    finally:
+    except BaseException:
         tmp.unlink(missing_ok=True)
-    entry = {"path": rel, "sha256": sha256_file(dest), "bytes": dest.stat().st_size, "format": "application/gzip",
-             "captured": iso(now_utc()), "fetched_url": url, "via": "git archive", "obtained_from": f"{url}@{sha}"}
-    rec.fm["originals"] = list(rec.fm.get("originals") or []) + [entry]
-    rec.save()
+        if not any(folder.iterdir()):
+            folder.rmdir()
+        raise
+    captured = iso(now_utc())
+    capture.write_manifest(folder, {"captured": captured, "via": "git archive", "fetched_url": url,
+                                    "obtained_from": f"{url}@{sha}", "main": name})
+    td = vault.typedef(rec)
+    rel = vault.rel(dest)
+    if td is not None and td.original == "immutable":
+        capture.set_flat(rec.fm, rel, sha256_file(dest), captured)
+        rec.save()
     append_log(vault.root, "watch-snapshot", rec.id, f"{rel} ({sha[:7]})")
     return {"id": rec.id, "path": rel, "sha": sha, "new": True}
 

@@ -13,7 +13,7 @@ A **vault** is a folder with `kb.yaml` (its profile). It is also an Obsidian vau
 
 1. `kb doctor`: shows which optional tools are installed, the registry, and the current vault.
 2. Read `kb.yaml`. The **types** and their **traits** decide everything: folders, required keys, whether a record has an immutable original, verbatim excerpts, a refresh or watch cadence. See [references/model.md](references/model.md) and [references/schema.md](references/schema.md).
-3. Read the vault's `AGENTS.md`. Its `kb:agents` block has the query recipe and the routing table.
+3. Read the vault's `README.md`: what the vault is for, its scope and its domain conventions. Then run `kb guide`, which prints the query recipe and rules from the installed kb. The vault's `AGENTS.md` only points to these two and carries the generated routing table, so the rules can't drift between vaults.
 
 ## Rules that always apply
 
@@ -46,4 +46,4 @@ kb init path/to/vault --profile generic|competition|agent-vault --name NAME
 kb registry add NAME path/to/vault          # so other repos and agents can use --vault NAME
 ```
 
-Then edit `kb.yaml`: description, tiers, scope fields, types, contexts and events, alerts. Run `kb build` and `kb lint`. Open the folder in Obsidian, and the generated `views/*.base` files appear as tables and card galleries.
+Then edit `kb.yaml` (description, tiers, scope fields, types, contexts and events, alerts) and **write `README.md`**: purpose, scope and coverage, consumers, conventions. `kb build` warns while it still has `<!-- kb:todo -->` placeholders, and keeps a generated contents block at its end. Run `kb build` and `kb lint`. Open the folder in Obsidian, and the generated `views/*.base` files appear as tables and card galleries.

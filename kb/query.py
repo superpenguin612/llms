@@ -243,7 +243,16 @@ def _table(cols, rows) -> str:
 
 # --- registration ------------------------------------------------------------------------------
 
+def guide(args) -> int:
+    from kb.profile import TEMPLATES
+    print((TEMPLATES / "guide.md").read_text(encoding="utf-8").rstrip())
+    return 0
+
+
 def register(subparsers, common):
+    p = subparsers.add_parser("guide", parents=[common],
+                              help="print the rules and query recipe for working in a kb vault")
+    p.set_defaults(func=guide)
     p = subparsers.add_parser("find", parents=[common], help="list records by type, origin, role, status, tag or property")
     p.add_argument("--type")
     p.add_argument("--origin", choices=("external", "internal"))

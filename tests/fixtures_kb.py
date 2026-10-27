@@ -4,6 +4,8 @@ from kb.util import sha256_bytes
 from tests.helpers import make_vault
 
 ORIGINAL = b"<html><p>The quick brown fox jumps over the lazy dog.</p></html>"
+MANIFEST = (f"captured: '2026-10-01T00:00:00Z'\nvia: urllib\nfetched_url: https://example.org/fox\nmain: page.html\n"
+            f"files:\n- name: page.html\n  sha256: {sha256_bytes(ORIGINAL)}\n  bytes: {len(ORIGINAL)}\n  format: html\n")
 TEXT = "[p1]\nThe quick brown fox jumps over the lazy dog.\nSecond paragraph about foxes.\n"
 
 
@@ -12,7 +14,8 @@ def sample_vault(root, **kw):
         "sources/fox-page.md": ({
             "type": "source", "title": "Fox page", "description": "A page about a fox.", "kind": "webpage",
             "tier": "primary", "url": "https://example.org/fox", "tags": ["animals"],
-            "originals": [{"path": "originals/fox-page/2026-10-01/page.html", "sha256": sha256_bytes(ORIGINAL)}],
+            "original": "originals/fox-page/2026-10-01/page.html", "sha256": sha256_bytes(ORIGINAL),
+            "captured": "2026-10-01T00:00:00Z",
             "last_checked": "2026-10-01"},
             "\n# Fox page\n\n## Summary\nFoxes.\n\n## Excerpts\n### e1\n> The quick brown fox jumps\nLocation: p. 1\n"),
         "notes/foxes.md": ({"type": "note", "title": "Foxes", "description": "What we know about foxes.",
@@ -20,7 +23,8 @@ def sample_vault(root, **kw):
                            "\n# Foxes\n\nFoxes jump ([[fox-page#e1]]).\n\n## Detail\nMore.\n"),
     }
     records.update(kw.pop("records", {}))
-    files = {"originals/fox-page/2026-10-01/page.html": ORIGINAL, "text/fox-page.md": TEXT}
+    files = {"originals/fox-page/2026-10-01/page.html": ORIGINAL, "text/fox-page.md": TEXT,
+             "originals/fox-page/2026-10-01/capture.yaml": MANIFEST}
     files.update(kw.pop("files", {}))
     return make_vault(root, records=records, files=files, **kw)
 

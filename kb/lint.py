@@ -8,11 +8,11 @@ from collections import defaultdict
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-from kb import build
+from kb import build, capture
 from kb import vault as vaultmod
 from kb.profile import STATUSES, check_value
 from kb.records import find_section, get_block, links_in_value, parse_excerpts, parse_links
-from kb.util import KBError, append_log, emit, excerpt_in_text, is_due, normalize, parse_cadence, sha256_file
+from kb.util import KBError, emit, excerpt_in_text, is_due, normalize, parse_cadence, sha256_file
 
 DEEP_CHECKLIST = """\
 Deep lint checklist (for an agent; kb can't check these):
@@ -43,6 +43,7 @@ class Linter:
         self.v, self.fixity, self.strict = vault, fixity, strict
         self.findings: list[Finding] = []
         self.indexed_at = build.built_at(vault)
+        self.clone_paths = {}
 
     def err(self, rule, path, msg):
         self.findings.append(Finding("error", rule, path, msg))
@@ -56,6 +57,9 @@ class Linter:
         v = self.v
         for rel, msg in v.load_errors:
             self.err("yaml", rel, f"{msg}; fix the front matter between the --- lines")
+        if v.profile.get("clone_root"):
+            self.warn("clone-root", "kb.yaml", f"clone_root is ignored; clones live in {capture.clones_root()} "
+                                               f"(set KB_CLONES to change); remove clone_root from kb.yaml")
         self.check_ids()
         for rec in v.records:
             self.check_record(rec)
@@ -189,64 +193,117 @@ class Linter:
                 self.err("tier", rel, f"external record needs a tier: one of {', '.join(prof.tiers)}")
             elif fm["tier"] not in prof.tiers:
                 self.err("tier", rel, f"tier {fm['tier']!r} is not one of {', '.join(prof.tiers)}")
-        if td.original == "immutable":
+        if "originals" in fm:
+            self.err("originals", rel, "old originals format; run `kb migrate originals`")
+        elif td.original == "immutable":
             self.check_originals(rec)
+        self.clone_paths[rec.id] = self.check_clone(rec)
         if td.quotes == "verbatim" or parse_excerpts(rec.body):
             self.check_excerpts(rec)
         self.check_links(rec, td)
         self.check_tracked(rec, td)
 
+    def _rehash(self, p: Path) -> bool:
+        return self.fixity or self.indexed_at is None or p.stat().st_mtime > self.indexed_at
+
     def check_originals(self, rec):
-        origs = rec.fm.get("originals") or []
-        if not origs and not rec.fm.get("originals_note"):
-            self.err("originals", rec.rel, "no originals; capture one, or set originals_note to say why there is none")
-        for o in origs:
-            if not isinstance(o, dict) or not o.get("path"):
-                self.err("originals", rec.rel, "each originals entry needs a path (and sha256)")
-                continue
-            p = self.v.root / str(o["path"])
-            if not p.is_file():
-                self.err("originals", rec.rel, f"original {o['path']} is missing; restore it from git or recapture")
-            elif self.fixity or self.indexed_at is None or p.stat().st_mtime > self.indexed_at:
-                if o.get("sha256") and sha256_file(p) != o["sha256"]:
-                    self.err("fixity", rec.rel, f"original {o['path']} sha256 differs from the record; originals are "
-                                                f"immutable: restore it from git")
+        fm = rec.fm
+        if not fm.get("original"):
+            if not fm.get("original_note"):
+                self.err("originals", rec.rel, "no original; capture one, or set original_note to say why there is none")
+            return
+        p = self.v.root / str(fm["original"])
+        if not p.is_file():
+            self.err("originals", rec.rel, f"original {fm['original']} is missing; restore it from git or recapture")
+        elif not fm.get("sha256"):
+            self.err("originals", rec.rel, f"no sha256 for {fm['original']}; set it to the file's sha256 (sha256sum)")
+        elif self._rehash(p) and sha256_file(p) != fm["sha256"]:
+            self.err("fixity", rec.rel, f"original {fm['original']} sha256 differs from the record; originals are "
+                                        f"immutable: restore it from git")
 
     def check_originals_tree(self):
-        """Originals are written only by kb: every file under originals/ must be listed by a record,
-        and git-tracked originals (including evidence files) must not be modified or deleted."""
-        listed = {str(o["path"]) for r in self.v.records for o in r.fm.get("originals") or []
-                  if isinstance(o, dict) and o.get("path")}
-        odir = self.v.root / "originals"
+        """Originals are written only by kb: every originals/<id>/<date>/ folder has a capture.yaml listing
+        exactly its files with matching sha256, <id> is a record, and committed originals never change."""
+        v = self.v
+        odir = v.root / "originals"
+        old = {r.id.casefold() for r in v.records if "originals" in r.fm}
+        fix = "originals are written only by kb (capture, triage, watch snapshot)"
         if odir.is_dir():
-            for p in sorted(odir.rglob("*")):
-                rel = self.v.rel(p)
-                if p.is_file() and rel not in listed:
-                    self.err("orphan-original", rel, "file under originals/ that no record lists; originals are "
-                                                     "written only by kb (capture, triage, watch snapshot): remove it "
-                                                     "or capture it properly")
+            for p in sorted(odir.iterdir()):
+                if not p.is_dir():
+                    self.err("orphan-original", v.rel(p), f"file outside a capture folder; {fix}: remove it or capture it properly")
+                    continue
+                if v.get(p.name) is None:
+                    self.err("orphan-original", v.rel(p), f"no record {p.name!r} owns these captures; {fix}: "
+                                                          f"rename the folder to the record id or remove it")
+                for f in sorted(p.iterdir()):
+                    if not f.is_dir():
+                        self.err("orphan-original", v.rel(f), f"file outside a capture folder; {fix}: remove it")
+            for rid, d in capture.capture_dirs(v):
+                if rid.casefold() not in old:
+                    self.check_manifest(d)
+        tracked = {str(r.fm["original"]) for r in v.records if r.fm.get("original")} | {"originals"}
         try:
-            out = subprocess.run(["git", "-C", str(self.v.root), "status", "--porcelain", "--no-renames", "--",
-                                  *sorted(listed | {"originals"})],
+            out = subprocess.run(["git", "-C", str(v.root), "status", "--porcelain", "--no-renames", "--",
+                                  *sorted(tracked)],
                                  capture_output=True, text=True, timeout=60)
         except (OSError, subprocess.TimeoutExpired):
             return
         if out.returncode != 0:
             return  # not a git repo
-        top = subprocess.run(["git", "-C", str(self.v.root), "rev-parse", "--show-toplevel"],
+        top = subprocess.run(["git", "-C", str(v.root), "rev-parse", "--show-toplevel"],
                              capture_output=True, text=True).stdout.strip()
         for line in out.stdout.splitlines():
             code, path = line[:2], line[3:]
             if "M" in code or "D" in code:
-                rel = os.path.relpath(os.path.join(top, path), self.v.root)
+                rel = os.path.relpath(os.path.join(top, path), v.root)
                 self.err("immutable", rel, "a committed original was modified or deleted; originals never change: "
                                            "restore it with `git checkout -- <file>` (recapture to add a new version)")
+
+    def check_manifest(self, d: Path):
+        rel = self.v.rel(d)
+        try:
+            m = capture.read_manifest(d)
+        except KBError as e:
+            self.err("manifest", rel, f"{e}; kb writes it on capture: restore it from git, or run "
+                                      f"`kb migrate originals` for a vault from an older kb")
+            return
+        listed = {str(f["name"]): f for f in m["files"]}
+        for f in sorted(d.rglob("*")):
+            name = f.relative_to(d).as_posix()
+            if f.is_file() and name != capture.MANIFEST and name not in listed:
+                self.err("manifest", f"{rel}/{name}", f"not listed in {capture.MANIFEST}; originals are written only "
+                                                      f"by kb: remove the file or recapture")
+        for name, f in listed.items():
+            p = d / name
+            if not p.is_file():
+                self.err("manifest", f"{rel}/{name}", f"listed in {capture.MANIFEST} but missing; restore it from git")
+            elif self._rehash(p) and sha256_file(p) != f.get("sha256"):
+                self.err("fixity", f"{rel}/{name}", f"sha256 differs from {capture.MANIFEST}; originals are "
+                                                    f"immutable: restore it from git")
+        if m.get("main") and m["main"] not in listed:
+            self.err("manifest", rel, f"main {m['main']!r} is not in files; restore {capture.MANIFEST} from git")
+
+    def check_clone(self, rec):
+        c = capture.parse_clone(rec.fm.get("text"))
+        if c is None:
+            return None
+        path, _, portable = c
+        if not portable:
+            self.warn("clone-path", rec.rel, "text: names a machine-specific clone path; run `kb migrate originals`")
+        if not (path / ".git").exists() and not (path / "HEAD").exists():
+            url = rec.fm.get("url") or "<repo url>"
+            self.warn("clone-missing", rec.rel, f"clone missing at {path}; restore with `kb capture {url}`")
+            return None
+        return path
 
     def check_excerpts(self, rec):
         tp = build.text_path(self.v, rec)
         text = tp.read_text(encoding="utf-8", errors="replace") if tp and tp.is_file() else None
         ntext = normalize(text) if text is not None else None
         history = sorted((self.v.root / "text" / "history" / rec.id).glob("*.md"))
+        clone = str(rec.fm.get("text") or "")
+        clone_path = self.clone_paths.get(rec.id)
         for e in parse_excerpts(rec.body):
             if e.withdrawn:
                 continue
@@ -254,12 +311,13 @@ class Linter:
             if not e.text:
                 self.err("excerpt", ref, "excerpt has no `>` quote lines; add the quote or mark it Withdrawn:")
                 continue
-            clone = str(rec.fm.get("text") or "")
             if clone.startswith("clone:") and not e.gone:
-                src = _clone_file(clone, e.location)
+                if clone_path is None:
+                    continue  # clone missing: warned once by check_clone
+                src = _clone_file(clone_path, clone.rpartition("@")[2], e.location)
                 if src is None:
-                    self.err("excerpt", ref, "repo excerpt needs `Location: <file> L<n>[-<m>] @ <commit>` and the clone "
-                                             "on disk at the path in `text:`")
+                    self.err("excerpt", ref, "repo excerpt needs `Location: <file> L<n>[-<m>] @ <commit>` naming a file "
+                                             "at a commit the clone has (git fetch in the clone if it is behind)")
                     continue
                 results = [excerpt_in_text(e.text, src)]
             elif e.gone:
@@ -346,7 +404,6 @@ def run(args) -> int:
     n_err = sum(f.severity == "error" for f in findings)
     n_warn = len(findings) - n_err
     summary = f"{n_err} errors, {n_warn} warnings"
-    append_log(v.root, "lint", v.name, summary + (" (fixity)" if args.fixity else ""))
     data = {"errors": n_err, "warnings": n_warn, "findings": [asdict(f) for f in findings]}
     if args.deep:
         data["deep_checklist"] = DEEP_CHECKLIST.splitlines()[1:]
@@ -366,16 +423,15 @@ def register(subparsers, common):
     p.set_defaults(func=run)
 
 
-def _clone_file(clone: str, location: str):
+def _clone_file(path: Path, commit: str, location: str):
     """Text of the file named in a repo excerpt's Location (`path L1-2 @ abc123`), read with `git show`
-    at that commit (or the commit in `text: clone:<path>@<commit>`). None if it can't be read."""
-    path, _, commit = clone[len("clone:"):].rpartition("@")
+    at that commit (or the record's pinned commit) in the clone at `path`. None if it can't be read."""
     m = re.match(r"\s*(\S+)(?:\s+L\d+(?:-\d+)?)?(?:\s*@\s*([0-9a-f]{4,40}))?", location or "")
-    if not m or not path:
+    if not m:
         return None
     ref = m.group(2) or commit
     try:
-        out = subprocess.run(["git", "-C", os.path.expanduser(path), "show", f"{ref}:{m.group(1)}"],
+        out = subprocess.run(["git", "-C", str(path), "show", f"{ref}:{m.group(1)}"],
                              capture_output=True, text=True, timeout=30)
     except (OSError, subprocess.TimeoutExpired):
         return None

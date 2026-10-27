@@ -351,7 +351,7 @@ def _ingest_one(v, td, rid, f, raw, s, started, ended, extra, dry_run, rep):
     raw_sha = sha256_bytes(raw)
     existing = v.get(rid)
     rec_path = existing.path if existing else v.root / td.folder_for() / f"{rid}.md"
-    if existing and raw_sha in str(existing.fm.get("originals_note", "")):
+    if existing and raw_sha in str(existing.fm.get("original_note") or existing.fm.get("originals_note") or ""):
         rep["unchanged"].append(rid)
         return
     rep["updated" if existing else "created"].append(rid)
@@ -374,14 +374,14 @@ def _ingest_one(v, td, rid, f, raw, s, started, ended, extra, dry_run, rep):
     flags = inject.scan(body_text)
 
     gen = {"tool": s["tool"], "session_id": s["session_id"], "started": iso(started), "ended": iso(ended),
-           "cwd": s["cwd"], "repo": repo, "model": s["model"], "commits": commits, "originals": [],
-           "originals_note": f"raw transcript kept outside git: {_abbrev(f)} sha256:{raw_sha}",
+           "cwd": s["cwd"], "repo": repo, "model": s["model"], "commits": commits,
+           "original_note": f"raw transcript kept outside git: {_abbrev(f)} sha256:{raw_sha}",
            "text": text_rel, "text_sha256": text_sha, "extracted_with": text_fm["extracted_with"],
-           "text_quality": "native", "updated": today()}
-    gen = {k: val for k, val in gen.items() if val not in ("", None) or k in ("originals",)}
+           "text_quality": "native", "updated": dt.date.fromisoformat(today())}
+    gen = {k: val for k, val in gen.items() if val not in ("", None)}
     if existing:
         fm = dict(existing.fm)
-        for k in ("repo", "model", "injection_flag", "injection_note"):
+        for k in ("repo", "model", "injection_flag", "injection_note", "originals", "originals_note"):
             fm.pop(k, None)
         if DESC_PREFIX in str(fm.get("description", "")):
             fm["description"] = desc

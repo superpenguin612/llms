@@ -38,9 +38,10 @@ class VaultTestCase(unittest.TestCase):
         self._td = tempfile.TemporaryDirectory()
         self.tmp = Path(self._td.name)
         self.addCleanup(os.chdir, os.getcwd())  # tests that chdir can't break later tests
-        self._env = {k: os.environ.get(k) for k in ("KB_REGISTRY", "KB_AGENT")}
+        self._env = {k: os.environ.get(k) for k in ("KB_REGISTRY", "KB_AGENT", "KB_CLONES")}
         os.environ["KB_REGISTRY"] = str(self.tmp / "registry.yaml")
         os.environ.pop("KB_AGENT", None)
+        os.environ["KB_CLONES"] = str(self.tmp / "clones")  # never touch the real clones root
 
     def tearDown(self):
         for k, v in self._env.items():

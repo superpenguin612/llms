@@ -293,3 +293,20 @@ class TestIds(VaultTestCase):
         self.assertLessEqual(len(short_id("x" * 90)), 40)
         self.assertEqual(_url_title("https://www.example.com/uploads/whitepapers/Zerologon.pdf"), "Zerologon")
         self.assertEqual(_url_title("https://www.example.com/"), "www.example.com")
+
+
+class TestProjectEntity(VaultTestCase):
+    def test_repo_card_links_or_creates_project_entity(self):
+        from kb.capture import link_project_entity
+        from kb.vault import open_vault
+        root = make_vault(self.tmp / "v", records={
+            "sources/repo-a.md": ({"type": "source", "title": "o/a", "kind": "repo"}, "\n# o/a\n"),
+            "sources/repo-b.md": ({"type": "source", "title": "o/b", "kind": "repo"}, "\n# o/b\n"),
+            "entities/project/known.md": ({"type": "entity", "title": "o/b", "kind": "project",
+                                           "watch": ["git:https://github.com/o/b"]}, "\n# o/b\n")})
+        v = open_vault(start=root)
+        eid = link_project_entity(v, v.get("repo-a"), "https://github.com/o/a")
+        v.reload()
+        self.assertEqual(v.get(eid).fm["watch"], ["git:https://github.com/o/a"])
+        self.assertEqual(v.get("repo-a").fm["entities"], [f"[[{eid}]]"])
+        self.assertEqual(link_project_entity(v, v.get("repo-b"), "https://github.com/o/b.git"), "known")

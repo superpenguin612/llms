@@ -26,6 +26,7 @@ def sample_vault(root, **kw):
     files = {"originals/fox-page/2026-10-01/page.html": ORIGINAL, "text/fox-page.md": TEXT,
              "originals/fox-page/2026-10-01/capture.yaml": MANIFEST}
     files.update(kw.pop("files", {}))
+    kw.setdefault("overrides", {}).setdefault("tags", {"animals": "animals and wildlife"})
     return make_vault(root, records=records, files=files, **kw)
 
 

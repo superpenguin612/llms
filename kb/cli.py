@@ -8,7 +8,7 @@ from kb import __version__
 from kb.util import KBError
 
 # Command modules, in help order. A module that doesn't exist yet is skipped.
-MODULES = ["init", "lint", "build", "query", "capture", "refresh", "collect", "triage", "queue",
+MODULES = ["init", "lint", "build", "query", "tags", "capture", "refresh", "collect", "triage", "queue",
            "watch", "snapshot", "registry", "sessions", "migrate"]
 
 

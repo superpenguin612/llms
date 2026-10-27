@@ -431,6 +431,49 @@ def _url_title(url: str) -> str:
     return stem if re.search(r"[A-Za-z]{3}", stem or "") else (u.hostname or url)
 
 
+def _project_type(vault):
+    """The profile's type for tracked projects: internal, watched, with 'project' among its kinds."""
+    for td in vault.profile.types.values():
+        kinds = td.keys.get("kind")
+        if td.origin == "internal" and td.tracked == "watch" and isinstance(kinds, list) and "project" in kinds:
+            return td
+    return None
+
+
+def link_project_entity(vault, card, url: str):
+    """A captured repo (source card: what it said at one commit) is paired with a project entity
+    (the living project: watch timeline, facts). Find it by handle or watch target, else create a stub;
+    then make sure the card lists it in `entities`. Returns the entity id, or None if the profile has no
+    project type."""
+    td = _project_type(vault)
+    if td is None:
+        return None
+    host, owner, name = _repo_parts(url)
+    path = f"{owner}/{name}"
+    handle, target = f"{host.split('.')[0]}:{path}", f"git:{url.rstrip('/')}"
+    ent = None
+    for r in vault.of_type(td.name):
+        if handle in (r.fm.get("handles") or []) or any(str(w).rstrip("/").removesuffix(".git") == target.removesuffix(".git")
+                                                        for w in r.fm.get("watch") or []):
+            ent = r
+            break
+    if ent is None:
+        eid = vault.new_id(slugify(path.replace("/", "-")))
+        fm = {"type": td.name, "title": path, "description": f"The {path} repository as a living project: watched for changes.",
+              "kind": "project", "handles": [handle], "watch": [target], "watch_every": td.watch_every,
+              "updated": dt.date.today()}
+        body = (f"\n# {path}\n\n## Summary\nSnapshots of what it contained are source cards: [[{card.id}]].\n\n"
+                f"## Facts\n\n## Timeline\n")
+        ent = write_record(vault.root / td.folder_for(kind="project") / f"{eid}.md", fm, body)
+        append_log(vault.root, "entity", eid, f"created for repo {url}")
+    link = f"[[{ent.path.stem}]]"
+    ents = card.fm.get("entities") or []
+    if link not in ents:
+        card.fm["entities"] = [*ents, link]
+        card.save()
+    return ent.path.stem
+
+
 def capture_url(vault, url, id=None, type="source", kind=None, obtained_from=None) -> Record:
     return _capture(vault, url, True, id, type, kind, obtained_from)[0]
 
@@ -510,6 +553,11 @@ def _capture(vault, src, is_url, id=None, type="source", kind=None, obtained_fro
         rec, change = _update(args, existing) if existing else _create(args)
         append_log(vault.root, "capture", rid, f"{change['status']} {src if is_url else Path(src).name}")
         vault.reload()
+        if card_kind == "repo" and is_url:
+            ent = link_project_entity(vault, rec, src)
+            if ent:
+                change["entity"] = ent
+                vault.reload()
         return rec, change
     finally:
         shutil.rmtree(stage, ignore_errors=True)

@@ -6,6 +6,7 @@ access: shared            # shared: any agent may read it. local: local-model ag
 
 # Source roles for external records. synthetic = LLM-written material: citable as context, never as support.
 tiers: [official, primary, secondary, community, vendor, synthetic]
+tags: {}                  # controlled vocabulary, name: "meaning"; add deliberately with `kb tags add`
 
 scope_fields: {}          # e.g. {season: year, region: [east, west]}
 phases: []                # e.g. [recon, exploit, report] for evidence

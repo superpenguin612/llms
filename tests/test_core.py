@@ -114,3 +114,17 @@ class TestProfile(VaultTestCase):
         data["types"]["topic"]["keys"]["tested"] = [True, False]
         with self.assertRaises(KBError):
             parse_profile(data)
+
+
+class TestTags(VaultTestCase):
+    def test_add_tag_keeps_profile_valid(self):
+        import yaml
+        from kb.tags import add_tag
+        root = make_vault(self.tmp / "v")
+        add_tag(root, "netlogon", "the Netlogon protocol")
+        add_tag(root, "detection", 'how to "detect" it')
+        tags = yaml.safe_load((root / "kb.yaml").read_text())["tags"]
+        self.assertEqual(tags, {"netlogon": "the Netlogon protocol", "detection": 'how to "detect" it'})
+        for bad in (("Bad Tag", "x"), ("ok", " "), ("netlogon", "again")):
+            with self.assertRaises(KBError):
+                add_tag(root, *bad)

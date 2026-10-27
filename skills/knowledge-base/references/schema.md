@@ -16,7 +16,8 @@
 | `title` | required; same as the H1 |
 | `description` | one self-contained sentence, ≤ 200 characters: the subject, its scope, why it matters |
 | `status` | `active` (default) · `draft` · `stale` · `superseded` · `implemented` |
-| `superseded_by`, `aliases`, `tags`, `updated` | as needed (`updated` on internal records) |
+| `superseded_by`, `aliases`, `updated` | as needed (`updated` on internal records) |
+| `tags` | only tags defined in kb.yaml `tags:` (`name: "meaning"`). Lint rejects anything else. A new tag is a deliberate decision: check `kb tags` first, and add one only when no existing tag fits, with `kb tags add NAME "meaning"` (agents: propose it to the user first). |
 | scope fields | as the profile's `scope_fields` declare (e.g. `season`, `event`) |
 
 ## By trait
@@ -36,4 +37,4 @@ Types add their own keys in `kb.yaml` (`keys:`, with specs `string` · `date` ·
 
 ## Profile (`kb.yaml`) top-level keys
 
-`schema` (4), `name`, `description`, `access` (`shared` · `local`), `tiers`, `scope_fields`, `tags` (optional controlled list), `phases`, `contexts`, `events` (with `date`; these drive `before-event`), `types`, `inbox.max_age`, `caps.warn_mb` / `caps.max_mb`, `alerts` (`ntfy`, `webhook_env`, `command`, `mode: immediate|digest`, `digest_every`), `collectors` (e.g. `github.token_env`), `secrets.extra_patterns` (extra regexes treated as secrets), `sessions.exclude`.
+`schema` (4), `name`, `description`, `access` (`shared` · `local`), `tiers`, `scope_fields`, `tags` (the controlled vocabulary: `name: "meaning"`; `{}` means no tags allowed yet; omit the key to leave tags uncontrolled), `phases`, `contexts`, `events` (with `date`; these drive `before-event`), `types`, `inbox.max_age`, `caps.warn_mb` / `caps.max_mb`, `alerts` (`ntfy`, `webhook_env`, `command`, `mode: immediate|digest`, `digest_every`), `collectors` (e.g. `github.token_env`), `secrets.extra_patterns` (extra regexes treated as secrets), `sessions.exclude`.

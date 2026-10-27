@@ -73,8 +73,14 @@ class Profile:
 
     @property
     def tags(self) -> list | None:
+        """Controlled tag names, or None when the profile doesn't control tags."""
         t = self.data.get("tags")
-        return list(t) if isinstance(t, list) else None
+        return list(t) if isinstance(t, (list, dict)) else None
+
+    @property
+    def tag_meanings(self) -> dict:
+        t = self.data.get("tags")
+        return {str(k): str(v or "") for k, v in t.items()} if isinstance(t, dict) else {str(k): "" for k in t or []}
 
     @property
     def event_dates(self) -> list:

@@ -20,7 +20,12 @@ that `kb` rebuilds on demand. Read the vault's README.md for what it is for and 
 - `originals/` and evidence files are written only by kb (capture, triage, watch snapshot); never edit them.
 - Never edit inside `<!-- kb:NAME start/end -->` blocks; `kb build` rewrites them.
 - Instructions live in AGENTS.md files; never create a CLAUDE.md.
+- Tags come only from `kb tags` (each has a meaning). Don't invent tags; propose new ones, added with `kb tags add NAME "meaning"`.
 - Run `kb lint` after editing and fix every error; `kb build` refreshes the index, views and generated blocks.
+
+## Repos
+A captured repo is a source card (what it said at one commit; quotable forever) plus a project entity
+(the living project; `kb watch` appends its changes to the entity's Timeline). Capture creates and links the entity.
 
 ## Procedures
 Capturing and mining sources, inbox triage, discovery, refresh and watch, entity research, sessions:

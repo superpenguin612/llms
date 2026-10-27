@@ -46,4 +46,4 @@ kb init path/to/vault --profile generic|competition|agent-vault --name NAME
 kb registry add NAME path/to/vault          # so other repos and agents can use --vault NAME
 ```
 
-Then edit `kb.yaml` (description, tiers, scope fields, types, contexts and events, alerts) and **write `README.md`**: purpose, scope and coverage, consumers, conventions. `kb build` warns while it still has `<!-- kb:todo -->` placeholders, and keeps a generated contents block at its end. Run `kb build` and `kb lint`. Open the folder in Obsidian, and the generated `views/*.base` files appear as tables and card galleries.
+Then edit `kb.yaml` (description, tiers, scope fields, types, contexts and events, alerts) and **write `README.md`**: purpose, scope and coverage, consumers, conventions. `kb build` warns while it still has `<!-- kb:todo -->` placeholders, and keeps a generated contents block at its end. Run `kb build` and `kb lint`. Open the folder in Obsidian, and the generated `views/*.base` files appear as live tables and card galleries.

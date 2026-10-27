@@ -5,6 +5,7 @@ name: agent-vault
 description: "Why my projects are the way they are: designs, agent sessions, project records."
 access: shared
 tiers: [official, primary, secondary, community, vendor, synthetic]
+tags: {}                  # controlled vocabulary, name: "meaning"; add deliberately with `kb tags add`
 inbox: {max_age: 7d}
 caps: {warn_mb: 10, max_mb: 25}
 sessions:

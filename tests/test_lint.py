@@ -53,6 +53,17 @@ class TestLint(VaultTestCase):
         with self.assertRaisesRegex(KBError, "scope_fields.season: use one of"):
             open_vault(start=sample_vault(self.tmp / "w", overrides={"scope_fields": {"season": "year"}}))
 
+    def test_non_string_core_keys_flagged(self):
+        root = sample_vault(self.tmp / "v", records={
+            "topics/bad.md": ({"type": "topic", "title": "Bad", "description": {"Foo": "bar baz"}, "x_note": 3}, "\n[[foxes]]\n")})
+        msgs = [f.message for f in Linter(open_vault(start=root)).run() if f.path == "topics/bad.md" and f.rule == "value"]
+        self.assertEqual(len(msgs), 2, msgs)
+        self.assertTrue(all("quote the value" in m for m in msgs))
+
+    def test_writer_quotes_colon_space(self):
+        from kb.records import dump_yaml
+        self.assertEqual(yaml.safe_load(dump_yaml({"description": "Foo: bar baz"})), {"description": "Foo: bar baz"})
+
     def test_h1_must_match_title(self):
         root = sample_vault(self.tmp / "v", records={
             "topics/same.md": ({"type": "topic", "title": "Same"}, "\n```\n# code\n```\n# Same\n[[foxes]]\n"),

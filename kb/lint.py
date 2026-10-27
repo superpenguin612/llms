@@ -165,6 +165,9 @@ class Linter:
             return
         if "id" in fm and str(fm["id"]) != rec.id:
             self.err("id", rel, f"front matter id {fm['id']!r} differs from the filename; make them equal or drop `id`")
+        for k, val in fm.items():  # `description: Foo: bar` unquoted parses as a mapping
+            if (k in ("title", "description") or k.endswith("_note")) and val is not None and not isinstance(val, str):
+                self.err("value", rel, f"{k} must be a string, got {type(val).__name__}; quote the value")
         for k in ["title", *td.required]:
             if fm.get(k) in (None, "", []):
                 self.err("required", rel, f"missing required key {k!r}")

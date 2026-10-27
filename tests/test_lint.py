@@ -53,6 +53,13 @@ class TestLint(VaultTestCase):
         with self.assertRaisesRegex(KBError, "scope_fields.season: use one of"):
             open_vault(start=sample_vault(self.tmp / "w", overrides={"scope_fields": {"season": "year"}}))
 
+    def test_h1_must_match_title(self):
+        root = sample_vault(self.tmp / "v", records={
+            "topics/same.md": ({"type": "topic", "title": "Same"}, "\n```\n# code\n```\n# Same\n[[foxes]]\n"),
+            "topics/drift.md": ({"type": "topic", "title": "New title"}, "\n# drift\n[[foxes]]\n")})
+        bad = [f.path for f in Linter(open_vault(start=root)).run() if f.rule == "h1"]
+        self.assertEqual(bad, ["topics/drift.md"])
+
     def test_warnings(self):
         old = time.time() - 10 * 86400
         root = sample_vault(self.tmp / "v", overrides={"caps": {"warn_mb": 0.000001}}, records={

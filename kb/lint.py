@@ -11,7 +11,7 @@ from pathlib import Path
 from kb import build, capture, style
 from kb import vault as vaultmod
 from kb.profile import STATUSES, check_value
-from kb.records import find_section, get_block, links_in_value, parse_excerpts, parse_links
+from kb.records import _mask_fences, find_section, get_block, links_in_value, parse_excerpts, parse_links
 from kb.util import KBError, emit, excerpt_in_text, is_due, normalize, parse_cadence, sha256_file
 
 DEEP_CHECKLIST = """\
@@ -173,6 +173,10 @@ class Linter:
                 msg = check_value(spec, fm[k])
                 if msg:
                     self.err("value", rel, f"{k}: {msg}")
+        h1 = re.search(r"(?m)^#[ \t]+(.+?)[ \t]*$", _mask_fences(rec.body))
+        if h1 and fm.get("title") and h1.group(1) != str(fm["title"]).strip():
+            self.err("h1", rel, f"first H1 {h1.group(1)!r} differs from title {str(fm['title']).strip()!r}; "
+                                f"make the H1 equal to title (change both together)")
         status = fm.get("status") or "active"
         if status not in STATUSES:
             self.err("value", rel, f"status {status!r} is not one of {', '.join(STATUSES)}")

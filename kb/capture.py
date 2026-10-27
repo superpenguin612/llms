@@ -509,17 +509,18 @@ def link_project_entity(vault, card, url: str, watch: bool = False):
     return ent.path.stem
 
 
-def capture_url(vault, url, id=None, type="source", kind=None, obtained_from=None) -> Record:
-    return _capture(vault, url, True, id, type, kind, obtained_from)[0]
+def capture_url(vault, url, id=None, type="source", kind=None, obtained_from=None, set=None) -> Record:
+    return _capture(vault, url, True, id, type, kind, obtained_from, set=set)[0]
 
 
-def capture_file(vault, path, id=None, type="source", kind=None, obtained_from=None) -> Record:
-    return _capture(vault, path, False, id, type, kind, obtained_from)[0]
+def capture_file(vault, path, id=None, type="source", kind=None, obtained_from=None, set=None) -> Record:
+    return _capture(vault, path, False, id, type, kind, obtained_from, set=set)[0]
 
 
-def _capture(vault, src, is_url, id=None, type="source", kind=None, obtained_from=None, watch=False, ref=None):
+def _capture(vault, src, is_url, id=None, type="source", kind=None, obtained_from=None, watch=False, ref=None, set=None):
     """Returns (record, change). change: {id, card, status: new|unchanged|same-text|changed, capture,
-    added, removed, gone, dead, warnings}. ref: capture a repo at that branch/tag/commit as its own card."""
+    added, removed, gone, dead, warnings}. ref: capture a repo at that branch/tag/commit as its own card.
+    set: extra front-matter keys, applied before the folder is computed."""
     vault.reload()
     td = vault.profile.type(type)
     existing = vault.get(id) if id else None
@@ -571,6 +572,8 @@ def _capture(vault, src, is_url, id=None, type="source", kind=None, obtained_fro
             text, meta, ek = got.text, got.meta, None
         title = (existing.title if existing else None) or got.title or meta.get("title") or \
             (_url_title(src) if is_url else Path(src).stem)
+        if set and set.get("title"):
+            title = set["title"]
         card_kind = kind or got.kind or CARD_KIND.get(Path(got.main).suffix.lower()) or CARD_KIND.get(ek)
         rid = existing.id if existing else (id or vault.new_id(getattr(got, "id", None) or short_id(title)))
 
@@ -588,7 +591,7 @@ def _capture(vault, src, is_url, id=None, type="source", kind=None, obtained_fro
         args = SimpleNamespace(vault=vault, rid=rid, td=td, got=got, text=text, meta=meta, title=title,
                                kind=card_kind, src=(got.final_url if ref else src) if is_url else None,
                                originals=originals, flags=flags,
-                               capture=vault.rel(final_dir), warnings=warnings)
+                               capture=vault.rel(final_dir), warnings=warnings, set=set or {})
         rec, change = _update(args, existing) if existing else _create(args)
         append_log(vault.root, "capture", rid, f"{change['status']} {src if is_url else Path(src).name}" + (f" @ {ref}" if ref else ""))
         vault.reload()
@@ -640,6 +643,7 @@ def _create(a):
     if a.kind == "image":
         fm["file"] = f"[[{Path(a.got.main).name}]]"
     fm = _drop_none(fm)
+    fm.update(a.set)
     hints = [k for k in ("title", "issued", "author") if k in m or (k == "title" and a.got.title)]
     notes = [f"- Stub written by kb capture on {today()}."
              + (f" {', '.join(hints)} came from {m.get('extracted_with', 'the tool')}: hints to confirm." if hints else "")]
@@ -659,6 +663,7 @@ def _update(a, rec):
     fm, body, d = rec.fm, rec.body, today()
     change = _change(a, "same-text", rec)
     set_flat(fm, **a.originals)
+    fm.update(a.set)
     fm["accessed"] = fm["last_checked"] = _day()
     if "clone" in a.meta:
         if fm.get("text") != a.meta["clone"]:
@@ -696,6 +701,8 @@ def _update(a, rec):
         fm["status"] = "stale"
         body = add_change(body, f"- {d}: live page dead ({a.got.via.removeprefix('wayback (live: ').rstrip(')')}); "
                                 f"captured the Wayback snapshot")
+    if a.set.get("title"):
+        body = re.sub(r"(?m)^#[ \t]+.+$", lambda _: f"# {a.set['title']}", body, count=1)
     rec.body = body
     rec.save()
     return rec, change
@@ -736,6 +743,8 @@ def register(subparsers, common):
     p.add_argument("--watch", action="store_true", help="repos: also watch the repo for new commits (kb watch)")
     p.add_argument("--ref", help="repos: capture this branch, tag, pull/N/head or full commit sha as its own card "
                                  "(fetched from origin if the clone lacks it)")
+    p.add_argument("--set", action="append", default=[], metavar="KEY=VALUE",
+                   help="extra front-matter key (repeatable); the value is read as YAML, e.g. --set event=ctf-1")
     p.set_defaults(func=run)
 
 
@@ -754,9 +763,21 @@ def describe(c) -> str:
 
 def run(args) -> int:
     v = vaultmod.open_from_args(args)
+    keys = {}
+    for kv in args.set:
+        k, eq, val = kv.partition("=")
+        if not eq or not k.strip():
+            raise KBError(f"--set takes KEY=VALUE, got {kv!r}")
+        keys[k.strip()] = yaml.safe_load(val)
+    if keys:
+        from kb import triage  # late: triage imports capture
+        td = v.profile.type(args.type)
+        errs = triage._check_set(v, "--set", "capture", td, keys)
+        if errs:
+            raise KBError("\n".join(errs))
     is_url = bool(re.match(r"(?i)^https?://", args.target)) or bool(args.ref)
     _, change = _capture(v, args.target, is_url, args.id, args.type, args.kind, args.obtained_from, watch=args.watch,
-                         ref=args.ref)
+                         ref=args.ref, set=keys)
     for w in change["warnings"]:
         print(f"kb capture: warning: {w}", file=sys.stderr)
     emit(args, change, describe(change))

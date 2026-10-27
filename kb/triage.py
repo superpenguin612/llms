@@ -511,14 +511,6 @@ def _retitle(body: str, title) -> str:
     return re.sub(r"(?m)^#[ \t]+.+$", lambda _: f"# {title}", body, count=1)
 
 
-def _set_keys(rec, keys) -> None:
-    if keys:
-        rec.fm.update(keys)
-        if "title" in keys:
-            rec.body = _retitle(rec.body, keys["title"])
-        rec.save()
-
-
 def _copy_in(src: Path, dest: Path, sha: str) -> None:
     """Copy src to dest atomically; never overwrite a different existing file."""
     if dest.exists():
@@ -657,8 +649,7 @@ def apply(vault, run: str) -> dict:
             try:
                 if route == "source":
                     rec = cap.capture_file(vault, vault.root / p["file"], id=p.get("id") or None,
-                                           type=p.get("type") or "source", obtained_from=key)
-                    _set_keys(rec, p.get("set"))
+                                           type=p.get("type") or "source", obtained_from=key, set=p.get("set"))
                     finish(p, "routed", rec.id)
                     continue
                 failed = []
@@ -666,8 +657,7 @@ def apply(vault, run: str) -> dict:
                     if f"{key}|{url}" in urls:
                         continue
                     try:
-                        rec = cap.capture_url(vault, url, type=p.get("type") or "source", obtained_from=key)
-                        _set_keys(rec, p.get("set"))
+                        rec = cap.capture_url(vault, url, type=p.get("type") or "source", obtained_from=key, set=p.get("set"))
                         urls[f"{key}|{url}"] = rec.id
                         _save_json(rdir / "applied.json", state)
                     except KBError as e:

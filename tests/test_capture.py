@@ -182,6 +182,37 @@ class TestCaptureWeb(CaptureCase):
         self.assertEqual((data["id"], data["status"], data["card"]), ("my-notes", "new", "sources/my-notes.md"))
 
 
+class TestCaptureSet(CaptureCase):
+    """A type whose folder uses a front-matter key gets it from `set`."""
+    def setUp(self):
+        super().setUp()
+        data = yaml.safe_load((self.root / "kb.yaml").read_text())
+        data["types"]["inject"] = {**data["types"]["source"], "folder": "injects/{event}",
+                                   "keys": {**data["types"]["source"]["keys"], "event": "string"}}
+        (self.root / "kb.yaml").write_text(yaml.safe_dump(data, sort_keys=False))
+        self.v = open_vault(start=self.root)
+        self.f = self.tmp / "note.txt"
+        self.f.write_text("Plain text for the example.\n")
+
+    def test_set_fills_folder_and_front_matter(self):
+        rec = capture.capture_file(self.v, self.f, type="inject", set={"event": "round-1"})
+        self.assertEqual((self.v.rel(rec.path), rec.fm["event"]), ("injects/round-1/note.md", "round-1"))
+
+    def test_cli_set_is_repeatable_and_validated(self):
+        cwd = os.getcwd()
+        os.chdir(self.root)
+        try:
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(cli.main(["capture", str(self.f), "--type", "inject", "--set", "event=round-2", "--json"]), 0)
+            self.assertEqual(read_record(self.root / "injects/round-2/note.md").fm["event"], "round-2")
+            err = io.StringIO()
+            with contextlib.redirect_stderr(err):
+                self.assertNotEqual(cli.main(["capture", str(self.f), "--type", "inject", "--set", "bogus=1"]), 0)
+            self.assertIn("set key 'bogus'", err.getvalue())
+        finally:
+            os.chdir(cwd)
+
+
 class TestCaptureFile(CaptureCase):
     @skipUnless(HAS["pymupdf"], "pymupdf not installed")
     def test_pdf_file_and_sha_dedup(self):

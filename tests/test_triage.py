@@ -46,11 +46,11 @@ def zip_bytes(members: dict) -> bytes:
 def fake_capture(calls):
     mod = types.ModuleType("kb.capture")
 
-    def capture_file(vault, path, id=None, type="source", kind=None, obtained_from=None):
+    def capture_file(vault, path, id=None, type="source", kind=None, obtained_from=None, set=None):
         calls.append(("file", Path(path).name, obtained_from))
         return types.SimpleNamespace(id=id or "captured-file")
 
-    def capture_url(vault, url, id=None, type="source", kind=None, obtained_from=None):
+    def capture_url(vault, url, id=None, type="source", kind=None, obtained_from=None, set=None):
         calls.append(("url", url, obtained_from))
         return types.SimpleNamespace(id="src-" + url.rsplit("/", 1)[-1])
 
@@ -244,18 +244,32 @@ class TestTriageFlow(VaultTestCase):
         pdf["set"] = {"tier": "official", "kind": "pdf"}
         self._save(run, props)
         seen = []
-
-        class Rec:
-            id, fm, body = "paper", {}, "\n# paper\n"
-            save = lambda self: seen.append((self.fm, self.body))
         cap = fake_capture([])
-        cap.capture_file = lambda *a, **k: Rec()
+        cap.capture_file = lambda *a, **k: seen.append(k["set"]) or types.SimpleNamespace(id="paper")
         with mock.patch.dict(sys.modules, {"kb.capture": cap}):
             triage.apply(self.v, run)
         fm = read_record(self.root / "topics/writeup.md").fm
         self.assertEqual((fm["title"], fm["description"], fm["season"]), ("Write-up", "d", 2026))
         self.assertIn("# Write-up", (self.root / "topics/writeup.md").read_text())
-        self.assertEqual(seen[0][0], {"tier": "official", "kind": "pdf"})
+        self.assertEqual(seen[0], {"tier": "official", "kind": "pdf"})
+
+    def test_apply_set_fills_custom_folder_key(self):
+        import yaml
+        data = yaml.safe_load((self.root / "kb.yaml").read_text())
+        src = data["types"]["source"]
+        data["types"]["inject"] = {**src, "folder": "injects/{event}", "keys": {**src["keys"], "event": "string"}}
+        (self.root / "kb.yaml").write_text(yaml.safe_dump(data, sort_keys=False))
+        v = open_vault(start=self.root)
+        (self.root / "inbox").mkdir(exist_ok=True)
+        (self.root / "inbox/task.txt").write_text("Plain text task for the example.\n")
+        prop = {"file": "inbox/task.txt", "sha256": "0" * 64, "route": "source", "type": "inject",
+                "id": "task", "set": {"event": "round-1"}}
+        rdir = self.root / ".kb" / "triage" / "20260101-000000"
+        rdir.mkdir(parents=True)
+        (rdir / "proposals.jsonl").write_text(json.dumps(prop) + "\n")
+        with mock.patch.object(triage, "_runs_dir", return_value=rdir.parent):
+            triage.apply(v, "20260101-000000")
+        self.assertEqual(read_record(self.root / "injects/round-1/task.md").fm["event"], "round-1")
 
     def test_scan_subtree_and_coexisting_runs(self):
         with mock.patch.object(triage.ocr, "available", return_value=False):

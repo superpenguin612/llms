@@ -99,6 +99,9 @@ def _typedef(name: str, spec: dict) -> TypeDef:
             raise KBError(f"kb.yaml types.{name}.{trait}: {spec[trait]!r} is not one of {', '.join(allowed)}")
     keys = spec.get("keys") or {}
     for k, ks in keys.items():
+        if isinstance(ks, list) and any(isinstance(x, bool) for x in ks):
+            raise KBError(f"kb.yaml types.{name}.keys.{k}: YAML read yes/no/true/false as booleans; "
+                          f"quote them (\"yes\") or use other words")
         if not (isinstance(ks, list) or ks in SCALAR_SPECS):
             raise KBError(f"kb.yaml types.{name}.keys.{k}: use one of {', '.join(SCALAR_SPECS)} or an enum list")
     for c in ("refresh", "watch_every"):

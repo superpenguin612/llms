@@ -99,7 +99,7 @@ types:
     role: synthesis
     claims: cited
     keys:
-      tested: [yes, no, partial]
+      tested: [untested, partial, tested]
       sources: links
 
   output:                 # something meant to leave the KB (findings, requirements ...)

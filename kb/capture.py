@@ -35,7 +35,8 @@ MIN_TEXT = 200  # fewer characters of body text than this means the capture is a
 VIDEO_HOSTS = ("youtube.com", "youtu.be", "vimeo.com")
 _REPO = re.compile(r"^https?://(?:www\.)?(github\.com|gitlab\.com|codeberg\.org)/([^/\s?#]+)/([^/\s?#]+?)(?:\.git)?/?$")
 CARD_KIND = {"html": "webpage", "pdf": "pdf", "image": "image", "subtitles": "video", "code": "code", "text": "docs",
-             ".pptx": "slides", ".docx": "office-doc", ".xlsx": "spreadsheet", ".xls": "spreadsheet"}
+             ".pptx": "slides", ".docx": "office-doc", ".xlsx": "spreadsheet", ".xls": "spreadsheet",
+             "archive": "collection"}
 # yt-dlp info.json keys holding per-request media URLs (they embed the fetching IP); not part of the work
 _INFO_DROP = ("formats", "requested_formats", "requested_downloads", "requested_subtitles", "automatic_captions",
               "subtitles", "thumbnails", "http_headers", "url", "manifest_url")

@@ -1,5 +1,10 @@
 import importlib.util
+import io
 import re
+import shutil
+import subprocess
+import tarfile
+import zipfile
 from unittest import mock, skipUnless
 
 from kb import extract
@@ -146,4 +151,71 @@ class TestExtract(VaultTestCase):
         p = self.tmp / "blob.bin"
         p.write_bytes(b"\xff\xfe\x00\x81" * 10)
         with self.assertRaises(KBError):
+            extract.extract(p)
+
+
+MEMBERS = (("notes/one.txt", b"first sample\n"), ("two.md", b"second sample\n" * 3))
+LISTING = ["notes/one.txt  13  2026-01-02 03:04", "two.md  42  2026-01-02 03:04"]
+
+
+class TestArchive(VaultTestCase):
+    def zip_file(self, name="pack.zip"):
+        p = self.tmp / name
+        with zipfile.ZipFile(p, "w") as z:
+            for n, data in MEMBERS:
+                z.writestr(zipfile.ZipInfo(n, date_time=(2026, 1, 2, 3, 4, 5)), data)
+        return p
+
+    def tar_file(self, name="pack.tar.gz", mode="w:gz"):
+        p = self.tmp / name
+        with tarfile.open(p, mode) as t:
+            for n, data in MEMBERS:
+                info = tarfile.TarInfo(n)
+                info.size, info.mtime = len(data), 1767312000  # 2026-01-02 00:00 UTC
+                t.addfile(info, io.BytesIO(data))
+        return p
+
+    def test_zip_and_tar_gz_list_members(self):
+        text, meta = extract.extract(self.zip_file())
+        self.assertEqual(text.splitlines(), LISTING)
+        self.assertEqual((meta["extracted_with"], meta["text_quality"]), ("kb archive", "manual"))
+        text, _ = extract.extract(self.tar_file())
+        self.assertEqual(text.splitlines(), ["notes/one.txt  13  2026-01-02 00:00", "two.md  42  2026-01-02 00:00"])
+        self.assertEqual(extract.detect(self.zip_file()), "archive")
+
+    def test_tgz_and_plain_tar_are_archives(self):
+        self.assertEqual(extract.detect(self.tar_file("pack.tgz")), "archive")
+        self.assertEqual(extract.detect(self.tar_file("pack.tar", "w")), "archive")
+
+    @skipUnless(shutil.which("zstd"), "zstd CLI not installed")
+    def test_tar_zst_lists_members_through_zstd(self):
+        tar = self.tar_file("pack.tar", "w")
+        p = self.tmp / "pack.tar.zst"
+        p.write_bytes(subprocess.run(["zstd", "-q", "-c", str(tar)], capture_output=True, check=True).stdout)
+        text, meta = extract.extract(p)
+        self.assertEqual([l.split("  ")[:2] for l in text.splitlines()], [["notes/one.txt", "13"], ["two.md", "42"]])
+        self.assertEqual(meta["text_quality"], "manual")
+
+    @skipUnless(shutil.which("zstd"), "zstd CLI not installed")
+    def test_zst_that_is_not_a_tar_has_no_listing(self):
+        p = self.tmp / "notes.zst"
+        p.write_bytes(subprocess.run(["zstd", "-q", "-c"], input=b"just text\n" * 50, capture_output=True,
+                                     check=True).stdout)
+        text, meta = extract.extract(p)
+        self.assertEqual(text.strip(), "")
+        self.assertIn("not a tar", meta["note"])
+
+    def test_zst_without_zstd_has_note_and_no_listing(self):
+        p = self.tmp / "pack.tar.zst"
+        p.write_bytes(b"\x28\xb5\x2f\xfd" + b"\x00" * 8)
+        with mock.patch("kb.extract.shutil.which", return_value=None):
+            text, meta = extract.extract(p)
+        self.assertEqual(text.strip(), "")
+        self.assertIn("zstd CLI is not installed", meta["note"])
+        self.assertEqual(meta["text_quality"], "none")
+
+    def test_corrupt_zip_says_what_failed(self):
+        p = self.tmp / "bad.zip"
+        p.write_bytes(b"PK\x03\x04 not really a zip")
+        with self.assertRaisesRegex(KBError, "could not list bad.zip"):
             extract.extract(p)

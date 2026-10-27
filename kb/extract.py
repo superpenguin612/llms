@@ -1,6 +1,6 @@
 """Text extraction with anchors: extract(path, kind=None) -> (text, meta).
 
-meta always has extracted_with, text_quality (good|mixed|ocr|partial|none) and anchors; it may add
+meta always has extracted_with, text_quality (good|mixed|ocr|partial|none|manual) and anchors; it may add
 hints from the tool (title, issued, author) that the agent should confirm, and ocr_pages/needs_ocr.
 """
 
@@ -8,7 +8,12 @@ import importlib
 import importlib.metadata
 import json
 import re
+import shutil
+import subprocess
+import tarfile
 import tempfile
+import time
+import zipfile
 from pathlib import Path
 
 from kb import ocr
@@ -24,6 +29,7 @@ EXT = {
              ".java", ".kt", ".swift", ".cs", ".rb", ".php", ".pl", ".lua", ".sh", ".bash", ".zsh", ".ps1",
              ".sql", ".yaml", ".yml", ".toml", ".json", ".xml", ".ini", ".cfg", ".conf", ".tf", ".nix"},
     "text": {".txt", ".md", ".markdown", ".rst", ".log", ".csv", ".tsv"},
+    "archive": {".zip", ".tar", ".tar.gz", ".tgz", ".tar.zst", ".zst"},
 }
 KINDS = tuple(EXT)
 # Source kinds (profile `kind` values) that imply an extractor regardless of extension.
@@ -39,9 +45,9 @@ def detect(path, kind=None) -> str:
     kind = ALIASES.get(kind, kind)
     if kind in KINDS:
         return kind
-    ext = Path(path).suffix.lower()
+    name = Path(path).name.lower()  # endswith, not suffix: ".tar.gz" has two suffixes
     for k, exts in EXT.items():
-        if ext in exts:
+        if any(name.endswith(e) for e in exts):
             return k
     head = Path(path).read_bytes()[:2048]
     if head.startswith(b"%PDF"):
@@ -221,6 +227,48 @@ def _code(path):
             pass
     fence = "`" * max(3, max((len(m) for m in re.findall(r"`{3,}", raw)), default=0) + 1)
     return f"{fence}{lang}\n{raw.rstrip()}\n{fence}\n", {"extracted_with": "kb", "anchors": "lines"}
+
+
+def _archive(path):
+    """Member listing, one `name  size  date` line per member; the archive itself is the original.
+    Nothing is written to disk, so member names cannot escape anywhere."""
+    name = path.name.lower()
+    try:
+        if name.endswith(".zip"):
+            with zipfile.ZipFile(path) as z:
+                rows = [(i.filename, i.file_size, "%04d-%02d-%02d %02d:%02d" % i.date_time[:5]) for i in z.infolist()]
+        elif name.endswith(".zst"):
+            rows, why = _zst_rows(path)
+            if rows is None:
+                return "", {"extracted_with": "kb archive", "anchors": "none", "text_quality": "none", "note": why}
+        else:
+            with tarfile.open(path, "r:*") as t:
+                rows = _tar_rows(t)
+    except (zipfile.BadZipFile, tarfile.TarError, OSError) as e:
+        raise KBError(f"could not list {path.name}: {e}") from None
+    text = "\n".join(f"{n}  {s}  {d}" for n, s, d in rows)
+    return text, {"extracted_with": "kb archive", "anchors": "none", "text_quality": "manual"}
+
+
+def _tar_rows(t):
+    return [(m.name, m.size, time.strftime("%Y-%m-%d %H:%M", time.gmtime(m.mtime))) for m in t]
+
+
+def _zst_rows(path):
+    """(rows, None) for a .tar.zst read through the zstd CLI (the stdlib has no zstd), or (None, why)
+    when there is no listing: zstd is missing or the payload is not a tar."""
+    if not shutil.which("zstd"):
+        return None, "no member listing: the zstd CLI is not installed (apt install zstd)"
+    proc = subprocess.Popen(["zstd", "-dc", str(path)], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    try:
+        with tarfile.open(fileobj=proc.stdout, mode="r|") as t:
+            rows = _tar_rows(t)
+    except tarfile.TarError:
+        rows = None
+    _, err = proc.communicate()  # reads the rest of the stream, so zstd can exit
+    if proc.returncode:
+        raise KBError(f"zstd could not decompress {path.name}: {err.decode(errors='replace').strip()}")
+    return (rows, None) if rows is not None else (None, "no member listing: not a tar archive")
 
 
 _TS = re.compile(r"(?:(\d+):)?(\d{1,2}):(\d{2})[.,](\d{1,3})\s*-->")

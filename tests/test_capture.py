@@ -270,6 +270,22 @@ class TestCaptureFile(CaptureCase):
         with self.assertRaisesRegex(KBError, "caps.max_mb"):
             capture.capture_file(open_vault(start=self.root), big)
 
+    def test_archive_keeps_original_and_lists_members(self):
+        import tarfile
+        import zipfile
+        zp = self.tmp / "pack.zip"
+        with zipfile.ZipFile(zp, "w") as z:
+            z.writestr("notes/one.txt", "first sample\n")
+        gp = self.tmp / "bundle.tar.gz"
+        with tarfile.open(gp, "w:gz") as t:
+            t.add(zp, arcname="pack.zip")
+        for p in (zp, gp):
+            rec = capture.capture_file(self.v, p)
+            self.assertEqual((rec.fm["kind"], rec.fm["text_quality"]), ("collection", "manual"), p.name)
+            self.assertEqual((self.root / rec.fm["original"]).read_bytes(), p.read_bytes())
+            member = "notes/one.txt  13  " if p == zp else "pack.zip  "
+            self.assertIn(member, (self.root / rec.fm["text"]).read_text())
+
     def test_same_date_folder_suffix(self):
         p = self.tmp / "a.txt"
         p.write_text("version one of the example\n")

@@ -25,7 +25,7 @@ that `kb` rebuilds on demand. Read the vault's README.md for what it is for and 
 
 ## Repos
 A captured repo is a source card (what it said at one commit; quotable forever) plus a project entity
-(the living project; `kb watch` appends its changes to the entity's Timeline). Capture creates and links the entity.
+(the living project; `kb watch` appends its changes to the entity's Timeline). Capture creates and links the entity; `--watch` also watches the repo.
 
 ## Procedures
 Capturing and mining sources, inbox triage, discovery, refresh and watch, entity research, sessions:

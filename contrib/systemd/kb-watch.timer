@@ -1,0 +1,10 @@
+[Unit]
+Description=Hourly kb watch runs
+
+[Timer]
+OnCalendar=hourly
+RandomizedDelaySec=5m
+Persistent=true
+
+[Install]
+WantedBy=timers.target

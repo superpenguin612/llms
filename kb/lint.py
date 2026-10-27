@@ -364,9 +364,7 @@ class Linter:
         fm = rec.fm
         if td.tracked == "refresh":
             cadence = fm.get("refresh", td.refresh)
-        elif td.tracked == "watch" and fm.get("watch"):
-            cadence = fm.get("watch_every", td.watch_every)
-        else:
+        else:  # watch due-ness lives in the index (kb watch list), not front matter
             return
         try:
             due = is_due(fm.get("last_checked"), cadence, event_dates=self.v.profile.event_dates)

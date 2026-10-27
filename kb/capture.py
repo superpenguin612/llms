@@ -440,11 +440,11 @@ def _project_type(vault):
     return None
 
 
-def link_project_entity(vault, card, url: str):
+def link_project_entity(vault, card, url: str, watch: bool = False):
     """A captured repo (source card: what it said at one commit) is paired with a project entity
     (the living project: watch timeline, facts). Find it by handle or watch target, else create a stub;
-    then make sure the card lists it in `entities`. Returns the entity id, or None if the profile has no
-    project type."""
+    then make sure the card lists it in `entities`. The git watch target is added only when watch=True:
+    many captured repos are one-off references. Returns the entity id, or None without a project type."""
     td = _project_type(vault)
     if td is None:
         return None
@@ -459,13 +459,15 @@ def link_project_entity(vault, card, url: str):
             break
     if ent is None:
         eid = vault.new_id(slugify(path.replace("/", "-")))
-        fm = {"type": td.name, "title": path, "description": f"The {path} repository as a living project: watched for changes.",
-              "kind": "project", "handles": [handle], "watch": [target], "watch_every": td.watch_every,
-              "updated": dt.date.today()}
+        fm = {"type": td.name, "title": path, "description": f"The {path} repository as a living project.",
+              "kind": "project", "handles": [handle], "updated": dt.date.today()}
         body = (f"\n# {path}\n\n## Summary\nSnapshots of what it contained are source cards: [[{card.id}]].\n\n"
                 f"## Facts\n\n## Timeline\n")
         ent = write_record(vault.root / td.folder_for(kind="project") / f"{eid}.md", fm, body)
         append_log(vault.root, "entity", eid, f"created for repo {url}")
+    if watch and target not in (ent.fm.get("watch") or []):
+        ent.fm["watch"] = [*(ent.fm.get("watch") or []), target]
+        ent.save()
     link = f"[[{ent.path.stem}]]"
     ents = card.fm.get("entities") or []
     if link not in ents:
@@ -482,7 +484,7 @@ def capture_file(vault, path, id=None, type="source", kind=None, obtained_from=N
     return _capture(vault, path, False, id, type, kind, obtained_from)[0]
 
 
-def _capture(vault, src, is_url, id=None, type="source", kind=None, obtained_from=None):
+def _capture(vault, src, is_url, id=None, type="source", kind=None, obtained_from=None, watch=False):
     """Returns (record, change). change: {id, card, status: new|unchanged|same-text|changed, capture,
     added, removed, gone, dead, warnings}."""
     vault.reload()
@@ -554,7 +556,7 @@ def _capture(vault, src, is_url, id=None, type="source", kind=None, obtained_fro
         append_log(vault.root, "capture", rid, f"{change['status']} {src if is_url else Path(src).name}")
         vault.reload()
         if card_kind == "repo" and is_url:
-            ent = link_project_entity(vault, rec, src)
+            ent = link_project_entity(vault, rec, src, watch=watch)
             if ent:
                 change["entity"] = ent
                 vault.reload()
@@ -694,6 +696,7 @@ def register(subparsers, common):
     p.add_argument("--type", default="source", help="record type (default: source)")
     p.add_argument("--kind", help="source kind, e.g. webpage, pdf, repo, video (default: inferred)")
     p.add_argument("--obtained-from", help="where the file came from (recorded on the original)")
+    p.add_argument("--watch", action="store_true", help="repos: also watch the repo for new commits (kb watch)")
     p.set_defaults(func=run)
 
 
@@ -713,7 +716,7 @@ def describe(c) -> str:
 def run(args) -> int:
     v = vaultmod.open_from_args(args)
     is_url = bool(re.match(r"(?i)^https?://", args.target))
-    _, change = _capture(v, args.target, is_url, args.id, args.type, args.kind, args.obtained_from)
+    _, change = _capture(v, args.target, is_url, args.id, args.type, args.kind, args.obtained_from, watch=args.watch)
     for w in change["warnings"]:
         print(f"kb capture: warning: {w}", file=sys.stderr)
     emit(args, change, describe(change))

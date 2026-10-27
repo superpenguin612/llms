@@ -20,8 +20,7 @@
   - `page:<url>`;
   - `feed:<url>`.
 - **Add a target:** `kb watch add <id> git:https://github.com/owner/repo`.
-- **Run on a schedule from cron or a systemd timer.** No agent is involved:
-  `*/15 * * * * cd /path/to/vault && kb watch run --due`.
+- **Run on a schedule.** No agent is involved: `kb watch run --due --push` checks what's due, commits only the record files that changed (`kb watch: N change(s) in …`) and pushes. If the remote moved, it rebases once and retries; on a conflict the commit stays local and the run fails. Quiet runs touch no files: check times live in the index. `contrib/` in the llms repo has a systemd timer that does this hourly for every registered shared vault.
   Each change is appended to the record's `## Timeline` (newest first), stored as an event, and sent through the profile's `alerts` (ntfy, a webhook, or a command; immediate or digest).
 - **Inspect:** `kb watch events --since 2026-10-01`.
 - **Freeze a repo as it is now** (before an event, say): `kb watch snapshot <id>` saves `git archive` of HEAD as an immutable original.

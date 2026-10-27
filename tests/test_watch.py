@@ -79,9 +79,10 @@ class TestWatch(VaultTestCase):
         self.assertIn("watch | rival | main:", (v.root / "log.md").read_text())
 
     def test_not_due_is_skipped(self):
-        v = self.vault([entity("rival", ["git:https://x/y"], last_checked="2999-01-01T00:00:00Z")])
-        with mock.patch("kb.watch.subprocess.run", FakeGit()):
-            self.assertEqual(watch.run(v, alert=False)["records"], [])
+        v = self.vault([entity("rival", ["git:https://example.com/o/r"])])
+        with mock.patch("kb.watch.subprocess.run", FakeGit(f"{A}\trefs/heads/main\n", f"{A}\trefs/heads/main\n")):
+            self.assertEqual(len(watch.run(v, alert=False)["records"]), 1)  # never checked: due
+            self.assertEqual(watch.run(v, alert=False)["records"], [])      # just checked: not due
 
     def test_mirror_commits_and_force_push(self):
         os.environ["KB_CLONES"] = str(self.tmp / "mirrors")
@@ -117,12 +118,15 @@ class TestWatch(VaultTestCase):
             return Resp(x)
         with mock.patch("kb.watch.urllib.request.urlopen", urlopen):
             watch.run(v, alert=False)
-            first = read_record(v.root / "entities/team/rival.md").fm["last_checked"]
+            checked = lambda: connect(v).execute(
+                "SELECT checked_at FROM watch_state WHERE record_id='rival' AND target LIKE 'github-user:%'").fetchone()[0]
+            first = checked()
             v.reload()
             r = watch.run(v, all_=True, alert=False, now=watch.now_utc().replace(year=2099))
             self.assertIn("rate limited", r["records"][1]["errors"][0]["error"])
             self.assertEqual(r["records"][0]["errors"], [])
-            self.assertEqual(read_record(v.root / "entities/team/rival.md").fm["last_checked"], first)
+            self.assertEqual(checked(), first)  # a failed target keeps its old check time, so it stays due
+            self.assertNotIn("last_checked", read_record(v.root / "entities/team/rival.md").fm)  # quiet: file untouched
             v.reload()
             r = watch.run(v, ["rival"], alert=False)
         self.assertEqual([c["summary"] for c in r["records"][0]["changes"]], ["rival/a pushed (2)", "new repo rival/b"])
@@ -160,7 +164,7 @@ class TestWatch(VaultTestCase):
             self.assertEqual(cli.main(["watch", "events"]), 0)
             with contextlib.redirect_stderr(io.StringIO()):
                 self.assertEqual(cli.main(["watch", "add", "rival", "bogus:x"]), 2)
-        self.assertIn("cron: */15 * * * * cd ", out.getvalue())
+        self.assertIn("kb watch run --due --push", out.getvalue())
         self.assertIn("github-releases:rival/tool", out.getvalue())
         self.assertEqual(read_record(root / "entities/team/rival.md").fm["watch"], ["github-releases:rival/tool"])
 
@@ -207,3 +211,37 @@ class TestWatchSnapshot(VaultTestCase):
         from kb.lint import Linter
         bad = [f for f in Linter(open_vault(start=root)).run() if f.rule in ("manifest", "orphan-original", "fixity")]
         self.assertEqual(bad, [])
+
+
+class TestCommitPush(VaultTestCase):
+    def test_commit_push_and_rebase_when_remote_moved(self):
+        g = ["git", "-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false"]
+        os.environ.update(GIT_CONFIG_COUNT="3", GIT_CONFIG_KEY_0="user.name", GIT_CONFIG_VALUE_0="t",
+                          GIT_CONFIG_KEY_1="user.email", GIT_CONFIG_VALUE_1="t@example.com",
+                          GIT_CONFIG_KEY_2="commit.gpgsign", GIT_CONFIG_VALUE_2="false")
+        self.addCleanup(lambda: [os.environ.pop(k, None) for k in list(os.environ) if k.startswith("GIT_CONFIG_")])
+        remote = self.tmp / "remote.git"
+        subprocess.run(["git", "init", "-q", "--bare", "-b", "main", str(remote)], check=True)
+        root = make_vault(self.tmp / "vault", records={"entities/team/r.md": ({"type": "entity", "title": "R", "kind": "team"}, "\n# R\n")},
+                          files={"notes.txt": "x"})
+        for cmd in (["init", "-q", "-b", "main"], ["add", "-A"], ["commit", "-qm", "init"],
+                    ["remote", "add", "origin", str(remote)], ["push", "-q", "-u", "origin", "main"]):
+            subprocess.run(g + ["-C", str(root)] + cmd, check=True)
+        other = self.tmp / "other"
+        subprocess.run(g + ["clone", "-q", str(remote), str(other)], check=True)
+        (other / "teammate.md").write_text("hi\n")
+        subprocess.run(g + ["-C", str(other), "add", "-A"], check=True)
+        subprocess.run(g + ["-C", str(other), "commit", "-qm", "teammate"], check=True)
+        subprocess.run(g + ["-C", str(other), "push", "-q"], check=True)   # remote moved
+
+        v = open_vault(start=root)
+        rec = v.get("r")
+        (rec.path).write_text(rec.path.read_text() + "\n## Timeline\n- change\n")
+        (root / "notes.txt").write_text("unrelated local edit")               # must not be committed
+        res = watch.commit_push(v, [{"id": "r", "path": str(rec.path), "changes": [{}]}], push=True)
+        self.assertEqual((res["committed"], res["pushed"], res.get("error")), (True, True, None))
+        log = subprocess.run(["git", "-C", str(remote), "log", "--format=%s", "main"], capture_output=True, text=True).stdout
+        self.assertEqual(log.split("\n")[:2], ["kb watch: 1 change(s) in r", "teammate"])
+        self.assertEqual((root / "notes.txt").read_text(), "unrelated local edit")  # autostash restored it
+        shown = subprocess.run(["git", "-C", str(remote), "show", "--stat", "--format=", "main"], capture_output=True, text=True).stdout
+        self.assertNotIn("notes.txt", shown)

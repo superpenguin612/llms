@@ -1,0 +1,11 @@
+#!/bin/sh
+# Run due watches in every registered shared vault, committing and pushing what changed.
+# Local-only vaults are skipped (they're for local-model runners). Exit 1 if any vault failed.
+set -u
+status=0
+for v in $(kb registry list --json | python3 -c '
+import json, sys
+print("\n".join(x["name"] for x in json.load(sys.stdin)["vaults"] if x.get("exists") and x.get("access") != "local"))'); do
+  kb --vault "$v" watch run --due --push || status=1
+done
+exit $status

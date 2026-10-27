@@ -1,0 +1,10 @@
+[Unit]
+Description=kb: run due watches in registered vaults, commit and push changes
+After=network-online.target
+
+[Service]
+Type=oneshot
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+# Optional: GITHUB_TOKEN=<read-only fine-grained token> for GitHub API checks (releases, new repos)
+EnvironmentFile=-%h/.config/kb/env
+ExecStart=%h/.local/bin/kb-watch-all

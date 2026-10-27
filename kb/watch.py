@@ -233,10 +233,9 @@ def run(vault, ids=(), all_=False, alert=True, now=None):
             if bad:
                 raise KBError(f"{', '.join(bad)}: not a watched record (needs a tracked: watch type and a watch: list); "
                               f"add a target with `kb watch add ID TARGET`")
-        else:
-            recs = [r for r in watched(vault)
-                    if all_ or is_due(r.fm.get("last_checked"), cadence(vault, r), now)]
         conn = notify_mod.connect(vault)
+        if not ids:
+            recs = [r for r in watched(vault) if all_ or is_due(_last_checked(conn, r), cadence(vault, r), now)]
         out = []
         try:
             for rec in recs:
@@ -247,6 +246,17 @@ def run(vault, ids=(), all_=False, alert=True, now=None):
         return {"records": out, "alerts": alerts}
     finally:
         lock.close()
+
+
+def _last_checked(conn, rec):
+    """Oldest successful check across the record's targets (None if any target was never checked).
+    Kept in the index, not front matter, so quiet runs don't touch files (no no-op commits)."""
+    targets = rec.fm.get("watch") or []
+    rows = conn.execute(f"SELECT checked_at FROM watch_state WHERE record_id=? AND target IN ({','.join('?' * len(targets))})",
+                        (rec.id, *targets)).fetchall() if targets else []
+    if len(rows) < len(targets):
+        return None
+    return min(r[0] for r in rows) if rows else rec.fm.get("last_checked")
 
 
 def _run_record(vault, conn, rec, now):
@@ -273,12 +283,37 @@ def _run_record(vault, conn, rec, now):
                      (target, rec.id, json.dumps(state, sort_keys=True), iso(now)))
     for c in reversed(res["changes"]):  # top-inserted, so reversed keeps this run's order
         rec.body = append_to_section(rec.body, "Timeline", f"- {stamp} — {c['summary']}", top=True)
-    if not res["errors"]:  # failed targets are retried on the next due run
+    if res["changes"]:  # quiet runs leave the file alone; failed targets stay due (their checked_at isn't updated)
         rec.fm["last_checked"] = iso(now)
-    if res["changes"] or not res["errors"]:
         rec.save()
+        res["path"] = str(rec.path)
     conn.commit()
     return res
+
+
+def commit_push(vault, records, push: bool) -> dict:
+    """Commit only the record files this run changed; optionally push. Never force-pushes: a rejected push
+    is retried once after `git pull --rebase`; on conflict the rebase is aborted and the commit stays local."""
+    paths = [r["path"] for r in records if r.get("path")]
+    if not paths:
+        return {"committed": False, "pushed": False}
+    n = sum(len(r["changes"]) for r in records)
+    msg = f"kb watch: {n} change(s) in {', '.join(sorted(r['id'] for r in records if r.get('path')))}"
+    root = str(vault.root)
+    _git("add", "--", *paths, cwd=root)
+    _git("commit", "-q", "-m", msg, "--", *paths, cwd=root)
+    out = {"committed": True, "message": msg, "pushed": False}
+    if push:
+        if _git("push", "-q", cwd=root, check=False).returncode != 0:
+            if _git("pull", "-q", "--rebase", "--autostash", cwd=root, check=False).returncode != 0:
+                _git("rebase", "--abort", cwd=root, check=False)
+                out["error"] = "push rejected and rebase conflicted; commit kept locally, resolve and push by hand"
+                return out
+            if _git("push", "-q", cwd=root, check=False).returncode != 0:
+                out["error"] = "push failed after rebase; commit kept locally"
+                return out
+        out["pushed"] = True
+    return out
 
 
 def cmd_run(args):
@@ -287,6 +322,10 @@ def cmd_run(args):
     if res is None:
         print("kb watch: another `kb watch run` holds .kb/watch.lock; skipping this run")
         return 0
+    if args.commit or args.push:
+        res["git"] = commit_push(vault, res["records"], push=args.push)
+        if res["git"].get("error"):
+            print(f"kb watch: {res['git']['error']}", file=sys.stderr)
 
     def text(d):
         lines = []
@@ -297,22 +336,29 @@ def cmd_run(args):
             for e in r["errors"]:
                 print(f"kb watch: {r['id']}: {e['target']}: {e['error']}", file=sys.stderr)
         lines += [f"alert via {a['channel']}: " + ("ok" if a["ok"] else f"failed ({a['error']})") for a in d["alerts"]]
+        g = d.get("git") or {}
+        if g.get("committed"):
+            lines.append(f"committed: {g['message']}" + (" (pushed)" if g.get("pushed") else ""))
         return lines or ["nothing due"]
     emit(args, res, text)
-    return 0
+    return 1 if (res.get("git") or {}).get("error") else 0
 
 
 def cmd_list(args):
     vault = open_from_args(args)
     now = now_utc()
-    rows = [{"id": r.id, "watch": r.fm.get("watch"), "every": cadence(vault, r),
-             "last_checked": str(r.fm.get("last_checked") or ""),
-             "due": is_due(r.fm.get("last_checked"), cadence(vault, r), now)} for r in watched(vault)]
+    conn = notify_mod.connect(vault)
+    try:
+        last = {r.id: _last_checked(conn, r) for r in watched(vault)}
+    finally:
+        conn.close()
+    rows = [{"id": r.id, "watch": r.fm.get("watch"), "every": cadence(vault, r), "last_checked": str(last[r.id] or ""),
+             "due": is_due(last[r.id], cadence(vault, r), now)} for r in watched(vault)]
 
     def text(rows):
         lines = [f"{r['id']} · every {r['every']} · last {r['last_checked'] or 'never'}{' · due' * r['due']}\n  "
                  + "\n  ".join(r["watch"]) for r in rows] or ["no watched records (add one with `kb watch add ID TARGET`)"]
-        return lines + ["", f"cron: */15 * * * * cd {vault.root} && kb watch run --due"]
+        return lines + ["", f"schedule: cd {vault.root} && kb watch run --due --push (see contrib/systemd in the llms repo)"]
     emit(args, rows, text)
     return 0
 
@@ -404,6 +450,8 @@ def register(subparsers, common):
     g.add_argument("--due", action="store_true", help="only records past their watch_every (default)")
     g.add_argument("--all", action="store_true", help="every watched record")
     r.add_argument("--no-alert", action="store_true", help="record events but send no alerts")
+    r.add_argument("--commit", action="store_true", help="git-commit the record files this run changed")
+    r.add_argument("--push", action="store_true", help="--commit, then push (rebases once if the remote moved)")
     r.add_argument("ids", nargs="*", metavar="ID")
     r.set_defaults(func=cmd_run)
     sub.add_parser("list", parents=[common], help="watched records, cadence, due").set_defaults(func=cmd_list)

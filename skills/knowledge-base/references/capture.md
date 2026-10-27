@@ -10,6 +10,7 @@ kb capture https://youtu.be/…                # video: info + subtitles, no med
 ```
 
 - Every capture folder `originals/<id>/<date>/` gets a `capture.yaml` that kb writes: the capture time, tool, fetched URL, HTTP status, the main file, and every file's sha256, size and format. Web captures keep the server's `headers.txt`.
+- **Repos** also get a linked project entity (see model.md). Watching is opt-in: `kb capture <repo-url> --watch` adds a `git:` watch target, or add one later with `kb watch add <entity> git:<url>`.
 - **Repo clones** live outside vaults, in one standard place: `$KB_CLONES`, else `$XDG_DATA_HOME/kb/clones`, else `~/.local/share/kb/clones`. Each is at `<host>/<owner>/<repo>`. Cards record the portable `text: clone:github.com/owner/repo@<commit>`. On another machine, `kb capture <url>` restores a missing clone without making a new capture.
 - `kb capture` dedups by URL and content hash. If a match exists, it adds a new dated capture to the existing record instead of creating a new one.
 - It saves the original, writes `text/<id>.md` with anchors, and creates a stub card with tool metadata filled in.

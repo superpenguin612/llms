@@ -45,8 +45,8 @@ class TestLint(VaultTestCase):
         old = time.time() - 10 * 86400
         root = sample_vault(self.tmp / "v", overrides={"caps": {"warn_mb": 0.000001}}, records={
             "topics/lonely.md": ({"type": "topic", "title": "L", "description": "x" * 201}, "\nno links\n"),
-            "entities/team/t1.md": ({"type": "entity", "title": "T", "kind": "team", "watch": ["git:https://example.org/r"],
-                                     "last_checked": "2020-01-01"}, "\n[[foxes]]\n"),
+            "sources/stale.md": ({"type": "source", "title": "S", "kind": "webpage", "tier": "primary",
+                                  "refresh": "weekly", "last_checked": "2020-01-01"}, "\n[[foxes]]\n"),
         }, files={"inbox/david/old.png": b"x"})
         os.utime(root / "inbox/david/old.png", (old, old))
         found = rules(root)

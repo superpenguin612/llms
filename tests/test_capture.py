@@ -307,6 +307,9 @@ class TestProjectEntity(VaultTestCase):
         v = open_vault(start=root)
         eid = link_project_entity(v, v.get("repo-a"), "https://github.com/o/a")
         v.reload()
+        self.assertNotIn("watch", v.get(eid).fm)  # watching is opt-in
+        link_project_entity(v, v.get("repo-a"), "https://github.com/o/a", watch=True)
+        v.reload()
         self.assertEqual(v.get(eid).fm["watch"], ["git:https://github.com/o/a"])
         self.assertEqual(v.get("repo-a").fm["entities"], [f"[[{eid}]]"])
         self.assertEqual(link_project_entity(v, v.get("repo-b"), "https://github.com/o/b.git"), "known")

@@ -38,6 +38,7 @@ A **vault** is a folder with `kb.yaml` (its profile). It is also an Obsidian vau
 | Research an entity (team, org, project, person) from public sources | [references/osint.md](references/osint.md) |
 | Ingest and summarize agent sessions (agent-vault) | [references/sessions.md](references/sessions.md) |
 | Lint, deep checks, snapshots | [references/lint.md](references/lint.md) |
+| What to write in summaries, key facts, topics, playbooks; format and style | [references/writing.md](references/writing.md) |
 
 ## Setting up a new vault
 

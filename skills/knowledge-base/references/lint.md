@@ -29,7 +29,8 @@ printf '#!/bin/sh\ncd "$(git rev-parse --show-toplevel)/knowledge-base" 2>/dev/n
 - stale inbox files;
 - large files;
 - cited-claims records that link to nothing;
-- overdue refresh or watch;
+- overdue refresh;
+- style: common AI-writing tells in our own prose (quotes, code and generated blocks are skipped). Rewrite the flagged line; see writing.md.
 - a repo clone missing on this machine (restore with `kb capture <url>`), or a leftover `clone_root` profile key.
 
 Lint and build don't write to `log.md`.

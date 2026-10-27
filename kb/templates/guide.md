@@ -21,6 +21,7 @@ that `kb` rebuilds on demand. Read the vault's README.md for what it is for and 
 - Never edit inside `<!-- kb:NAME start/end -->` blocks; `kb build` rewrites them.
 - Instructions live in AGENTS.md files; never create a CLAUDE.md.
 - Tags come only from `kb tags` (each has a meaning). Don't invent tags; propose new ones, added with `kb tags add NAME "meaning"`.
+- Write plainly and specifically (skill: references/writing.md); `kb lint` warns on common AI-writing tells.
 - Run `kb lint` after editing and fix every error; `kb build` refreshes the index, views and generated blocks.
 
 ## Repos

@@ -27,7 +27,7 @@ kb capture https://youtu.be/…                # video: info + subtitles, no med
    - scope fields, `tags`, `entities` (link the author's or org's entity record, creating a stub when missing);
    - `same_work` / `derived_from` when this is a copy of something already in the vault;
    - `depth`, `mined_by` (your model/agent name), `mined_on`.
-3. **Write the body:**
+3. **Write the body** following [writing.md](writing.md) (what goes in each part, format, an example):
    - `## Summary`: 2-5 self-contained sentences. Name the subject and its scope (who, where, when) and what the source is most useful for. No pronouns that need context.
    - `## Key facts`: atomic, self-contained claims. Each one names its subject, year and scope and ends with the excerpt(s) that support it: `- In 2025 the qualifier awarded 40% of points to injects. [[id#e2]]`. Use the markers `[inferred: basis]`, `[estimate]`, `[secondhand]`, `[unverified]` and `[contradicted: [[other#e4]]]`.
    - `## Excerpts`: generous, verbatim, numbered `### e1`, `### e2` … in source order. Each is a `>` quote followed by `Location: p. 12 | slide 7 | 00:31:05 | §"Heading" ¶2 | path/file.go L40-52 @ abc1234`. Copy the text exactly; `[...]` marks a gap. Append only, never renumber.

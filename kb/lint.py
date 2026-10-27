@@ -8,7 +8,7 @@ from collections import defaultdict
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-from kb import build, capture
+from kb import build, capture, style
 from kb import vault as vaultmod
 from kb.profile import STATUSES, check_value
 from kb.records import find_section, get_block, links_in_value, parse_excerpts, parse_links
@@ -202,6 +202,7 @@ class Linter:
             self.check_excerpts(rec)
         self.check_links(rec, td)
         self.check_tracked(rec, td)
+        self.check_style(rec)
 
     def _rehash(self, p: Path) -> bool:
         return self.fixity or self.indexed_at is None or p.stat().st_mtime > self.indexed_at
@@ -220,6 +221,12 @@ class Linter:
         elif self._rehash(p) and sha256_file(p) != fm["sha256"]:
             self.err("fixity", rec.rel, f"original {fm['original']} sha256 differs from the record; originals are "
                                         f"immutable: restore it from git")
+
+    def check_style(self, rec):
+        """Common AI-writing tells in our own prose (quotes, code and generated blocks are skipped)."""
+        offset = rec.path.read_text(encoding="utf-8", errors="replace").count("\n") - rec.body.count("\n")
+        for n, rule, found, hint in style.check(rec.body):
+            self.warn("style", f"{rec.rel}:{n + offset}", f"{found!r}: {hint} (skill: references/writing.md)")
 
     def check_originals_tree(self):
         """Originals are written only by kb: every originals/<id>/<date>/ folder has a capture.yaml listing

@@ -128,3 +128,18 @@ class TestTags(VaultTestCase):
         for bad in (("Bad Tag", "x"), ("ok", " "), ("netlogon", "again")):
             with self.assertRaises(KBError):
                 add_tag(root, *bad)
+
+
+class TestStyle(VaultTestCase):
+    def test_flags_tells_in_prose_only(self):
+        from kb import style
+        body = ("\n## Summary\nThis whitepaper describes a crucial flaw, highlighting the risk.\n"
+                "It is not just a bug, but a design error.\n\n## Excerpts\n### e1\n> A crucial, pivotal quote.\n"
+                "\n## Notes\n```\ncrucial in code\n```\nPlain notes with [[crucial-link]] and `crucial`.\n")
+        rules = [(r, f.lower()) for _, r, f, _ in style.check(body)]
+        self.assertIn(("about-the-document", "this whitepaper describes"), rules)
+        self.assertIn(("ai-word", "crucial"), rules)
+        self.assertIn(("ing-rider", ", highlighting"), rules)
+        self.assertIn(("not-x-but-y", "not just a bug, but"), rules)
+        self.assertEqual(sum(1 for r, f in rules if f == "crucial"), 1)  # quotes, code and links are skipped
+        self.assertEqual(style.check("\n## Summary\nSamba 4.8 and later refuse insecure Netlogon by default.\n"), [])

@@ -1,3 +1,4 @@
+import unittest
 import contextlib
 import email.message
 import io
@@ -137,7 +138,8 @@ class TestCaptureWeb(CaptureCase):
         self.assertEqual((ex["e1"].gone, ex["e1"].location, ex["e2"].gone), (today(), "end", ""))
         self.assertIn(f"- {today()}: recaptured; text changed (+", rec2.body)
         self.assertIn("gone: e1", rec2.body)
-        self.assertLess(rec2.body.index("## Changes"), rec2.body.index("## Notes"))
+        self.assertLess(rec2.body.index("## Excerpts"), rec2.body.index("## Notes"))
+        self.assertLess(rec2.body.index("## Notes"), rec2.body.index("## Changes"))
         self.assertEqual(rec2.fm["original"], f"originals/{rec.id}/{today()}-2/index.html")  # latest capture
 
     def test_dead_page_uses_wayback(self):
@@ -460,3 +462,16 @@ class TestCaptureRepoRef(CaptureCase):
                                         capture_output=True).returncode, 0)
         self.assertEqual(len(change["warnings"]), 1)
         self.assertIn("ffffffffffff", change["warnings"][0])
+
+
+class TestAddChange(unittest.TestCase):
+    def test_after_notes_before_generated_block(self):
+        body = "# T\n\n## Excerpts\n### e1\n> q\n\n## Notes\nn\n\n<!-- kb:related start -->\nx\n<!-- kb:related end -->\n"
+        out = capture.add_change(body, "- d: changed")
+        self.assertLess(out.index("## Notes"), out.index("## Changes"))
+        self.assertLess(out.index("- d: changed"), out.index("<!-- kb:related start"))
+        out = capture.add_change(out, "- e: again")
+        self.assertIn("- d: changed\n- e: again\n", out)
+        from kb.records import append_to_section, parse_excerpts
+        out = append_to_section(out, "Excerpts", "### e2\n> later\nLocation: p. 1")
+        self.assertEqual([e.eid for e in parse_excerpts(out)], ["e1", "e2"])

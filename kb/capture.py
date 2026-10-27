@@ -456,11 +456,17 @@ def mark_gone(body: str, eids, date: str) -> str:
 
 
 def add_change(body: str, line: str) -> str:
-    """Append a line to ## Changes, creating it just before ## Notes when missing."""
+    """Append a line to ## Changes; when missing, create it after ## Notes. Either way it stays before any
+    generated block, so later excerpts appended to ## Excerpts never land under it."""
+    sec = find_section(body, "Changes")
     notes = find_section(body, "Notes")
-    if find_section(body, "Changes") is None and notes:
-        return body[:notes[0]] + f"## Changes\n{line}\n\n" + body[notes[0]:]
-    return append_to_section(body, "Changes", line)
+    end = sec[2] if sec else notes[2] if notes else len(body)
+    gen = re.search(r"<!-- kb:\w+ start -->", body)
+    if gen and gen.start() < end:
+        end = gen.start()
+    head, tail = body[:end].rstrip("\n"), body[end:]
+    add = f"\n{line}" if sec else f"\n\n## Changes\n{line}"
+    return head + add + "\n" + ("\n" + tail if tail else "")
 
 
 def _day(s=None):

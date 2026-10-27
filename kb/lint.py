@@ -438,12 +438,13 @@ def register(subparsers, common):
 def _clone_file(path: Path, commit: str, location: str):
     """Text of the file named in a repo excerpt's Location (`path L1-2 @ abc123`), read with `git show`
     at that commit (or the record's pinned commit) in the clone at `path`. None if it can't be read."""
-    m = re.match(r"\s*(\S+)(?:\s+L\d+(?:-\d+)?)?(?:\s*@\s*([0-9a-f]{4,40}))?", location or "")
+    # path may contain spaces (or be `backtick-quoted`): parse the ` L<n>[-<m>] @ <sha>` tail from the end
+    m = re.match(r"\s*(?:`([^`]+)`|(.+?))(?:\s+L\d+(?:-\d+)?)?(?:\s*@\s*([0-9a-f]{4,40}))?\s*$", location or "")
     if not m:
         return None
-    ref = m.group(2) or commit
+    path_, ref = m.group(1) or m.group(2), m.group(3) or commit
     try:
-        out = subprocess.run(["git", "-C", str(path), "show", f"{ref}:{m.group(1)}"],
+        out = subprocess.run(["git", "-C", str(path), "show", f"{ref}:{path_}"],
                              capture_output=True, text=True, timeout=30)
     except (OSError, subprocess.TimeoutExpired):
         return None

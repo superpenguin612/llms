@@ -4,7 +4,7 @@
 
 - **What:** records whose type has `tracked: refresh`, at their `refresh` cadence (`never`, `weekly`, `monthly`, `before-event` …).
 - **Command:** `kb refresh --due` (or `kb refresh <id>…`).
-- **What it does:** recaptures into a new dated folder and diffs the text. On a change, it moves the old text to `text/history/`, appends a `## Changes` entry, and marks excerpts missing from the new text with `Gone: <date>`. Those excerpts stay valid against the older text.
+- **What it does:** recaptures into a new dated folder and diffs the text. On a change, it moves the old text to `text/history/`, appends a `## Changes` entry (after `## Notes`, so later excerpts still go in `## Excerpts`), and marks excerpts missing from the new text with `Gone: <date>`. Those excerpts stay valid against the older text.
 
 **Your part** (`kb refresh --due --json` gives the change list):
 1. For each changed record, replace the generated `## Changes` line with a one-line summary of what actually changed (a section rewritten, numbers updated, the page removed).

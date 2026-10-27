@@ -219,3 +219,19 @@ class TestRepoExcerpts(VaultTestCase):
         msg = [x.message for x in ls if x.rule == "clone-missing"][0]
         self.assertIn(str(self.tmp / "empty/github.com/example/tool"), msg)
         self.assertIn("kb capture https://github.com/example/tool", msg)
+
+
+class TestCloneFileLocation(VaultTestCase):
+    def test_paths_with_spaces(self):
+        import subprocess
+        from kb.lint import _clone_file
+        repo = self.tmp / "r"
+        (repo / "win/Domain Controller").mkdir(parents=True)
+        (repo / "win/Domain Controller/a b.ps1").write_text("hello\n")
+        g = lambda *a: subprocess.run(["git", "-C", str(repo), *a], check=True, capture_output=True, text=True).stdout.strip()
+        g("init", "-q"); g("add", "."); g("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "x")
+        sha = g("rev-parse", "HEAD")
+        for loc in (f"win/Domain Controller/a b.ps1 L10-20 @ {sha}", f"`win/Domain Controller/a b.ps1` L3 @ {sha}",
+                    f"win/Domain Controller/a b.ps1 @ {sha}"):
+            self.assertEqual(_clone_file(repo, "", loc), "hello\n", loc)
+        self.assertIsNone(_clone_file(repo, "", f"win/missing.ps1 L1 @ {sha}"))

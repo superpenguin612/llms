@@ -59,7 +59,7 @@ def read_record(path, rel: str = "") -> Record | None:
     """Read a Markdown file; None if it has no front matter."""
     path = Path(path)
     fm, body = split_front_matter(path.read_text(encoding="utf-8", errors="replace"))
-    if fm is None:
+    if fm is None or "type" not in fm:  # e.g. skill or tool front matter: not a kb record
         return None
     return Record(path=path, fm=fm, body=body, rel=rel)
 
@@ -73,15 +73,22 @@ def write_record(path, fm: dict, body: str) -> Record:
 # --- sections -------------------------------------------------------------------
 
 _HEADING = re.compile(r"(?m)^(#{1,6})[ \t]+(.+?)[ \t]*#*[ \t]*$")
+_FENCE = re.compile(r"(?ms)^[ \t]*(```|~~~).*?(?:^[ \t]*\1[ \t]*$|\Z)")
+
+
+def _mask_fences(text: str) -> str:
+    """Blank out fenced code blocks (same length, newlines kept) so headings inside them are ignored."""
+    return _FENCE.sub(lambda m: re.sub(r"[^\n]", " ", m.group(0)), text)
 
 
 def find_section(body: str, heading: str, level: int = 2):
     """(start_of_heading, start_of_content, end) for the first `## heading`, or None.
     The section ends at the next heading of the same or higher level."""
-    for m in _HEADING.finditer(body):
+    masked = _mask_fences(body)
+    for m in _HEADING.finditer(masked):
         if len(m.group(1)) == level and m.group(2).strip().lower() == heading.lower():
             end = len(body)
-            for n in _HEADING.finditer(body, m.end()):
+            for n in _HEADING.finditer(masked, m.end()):
                 if len(n.group(1)) <= level:
                     end = n.start()
                     break
@@ -132,7 +139,7 @@ def parse_excerpts(body: str) -> list[Excerpt]:
     if not section:
         return []
     out = []
-    heads = list(_EXC_HEAD.finditer(section))
+    heads = list(_EXC_HEAD.finditer(_mask_fences(section)))
     for i, m in enumerate(heads):
         chunk = section[m.end(): heads[i + 1].start() if i + 1 < len(heads) else len(section)]
         quote, loc, withdrawn, gone = [], "", "", ""

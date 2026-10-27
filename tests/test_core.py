@@ -54,6 +54,11 @@ class TestRecords(VaultTestCase):
         links = parse_links(body)
         self.assertEqual([(l.target, l.anchor, l.embed) for l in links], [("other", "e3", False), ("shot.png", "", True)])
 
+    def test_headings_in_code_fences_are_ignored(self):
+        body = "## Notes\n```markdown\n## Excerpts\n### e1\n> fake\n```\n\n## Excerpts\n### e1\n> real\n"
+        self.assertEqual([e.text for e in parse_excerpts(body)], ["real"])
+        self.assertIsNone(get_section("```\n## Excerpts\n```\n", "Excerpts"))
+
     def test_replace_block(self):
         t = replace_block("intro\n", "agents", "v1")
         self.assertIn("<!-- kb:agents start -->\nv1\n<!-- kb:agents end -->", t)

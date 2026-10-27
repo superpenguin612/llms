@@ -223,6 +223,7 @@ VIEW_LATER = ("sensitive", "captured", "contributor", "issued", "author", "last_
 def _view_keys(td, limit: int = 9) -> list:
     keys = [k for k in td.required if k in td.keys]
     keys += [k for k in VIEW_FIRST if k in td.keys]
+    keys += [k for k, spec in td.keys.items() if isinstance(spec, list)]  # enums filter well
     keys += [k for k, spec in td.keys.items() if spec in ("link", "links")]
     keys += [k for k in VIEW_LATER if k in td.keys]
     out = []
@@ -372,6 +373,44 @@ def write_readme_nav(vault, warn=None) -> bool:
     return new != old
 
 
+# --- Obsidian property types ------------------------------------------------------------------
+
+_CORE_TYPES = {"tags": "tags", "aliases": "aliases", "updated": "date", "accessed": "date", "last_checked": "date",
+               "mined_on": "date", "contributor": "multitext", "author": "multitext", "supports": "multitext",
+               "entities": "multitext", "watch": "multitext", "sha256": "text", "captured": "text"}
+_SPEC_TYPES = {"list": "multitext", "links": "multitext", "link": "text", "bool": "checkbox", "int": "number",
+               "string": "text"}
+
+
+def write_obsidian_types(vault) -> bool:
+    """Declare property types in .obsidian/types.json so Properties shows dates, lists and checkboxes
+    consistently. Dates from the profile stay text when partial dates (2020-09) are allowed."""
+    p = vault.root / ".obsidian" / "types.json"
+    if not p.parent.is_dir():
+        return False
+    try:
+        data = json.loads(p.read_text(encoding="utf-8")) if p.exists() else {}
+    except ValueError:
+        data = {}
+    types = data.setdefault("types", {})
+    wanted = dict(_CORE_TYPES)
+    for td in vault.profile.types.values():
+        for k, spec in td.keys.items():
+            if isinstance(spec, list):
+                wanted.setdefault(k, "text")
+            elif spec in _SPEC_TYPES:
+                wanted.setdefault(k, _SPEC_TYPES[spec])
+            elif spec == "date":
+                wanted.setdefault(k, "text")  # may hold 2020-09 or 2020
+    changed = False
+    for k, t in wanted.items():
+        if k not in types:  # never override a type the user set in Obsidian
+            types[k], changed = t, True
+    if changed:
+        atomic_write(p, json.dumps(data, indent=2) + "\n")
+    return changed
+
+
 def build(vault, warn=None) -> dict:
     stats = {"blocks": write_record_blocks(vault)}
     if stats["blocks"]:
@@ -380,6 +419,7 @@ def build(vault, warn=None) -> dict:
     stats["views"] = write_views(vault)
     stats["agents_updated"] = write_agents(vault)
     stats["readme_updated"] = write_readme_nav(vault, warn)
+    stats["obsidian_types"] = write_obsidian_types(vault)
     return stats
 
 

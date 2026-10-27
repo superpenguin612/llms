@@ -114,3 +114,16 @@ class TestGeneratedBlocks(VaultTestCase):
         self.assertNotIn("&id", base)
         self.assertIn("note.phase", base)
         self.assertIn("note.supports", base)
+
+
+class TestObsidianTypes(VaultTestCase):
+    def test_types_json_written_without_overriding_user_choices(self):
+        import json
+        from kb.vault import open_vault
+        root = make_vault(self.tmp / "v", files={".obsidian/types.json": '{"types": {"updated": "text"}}'})
+        build.build(open_vault(start=root))
+        types = json.loads((root / ".obsidian/types.json").read_text())["types"]
+        self.assertEqual(types["updated"], "text")       # user's choice kept
+        self.assertEqual(types["tags"], "tags")
+        self.assertEqual(types["supports"], "multitext")
+        self.assertEqual(types["issued"], "text")         # partial dates allowed

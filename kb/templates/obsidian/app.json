@@ -2,5 +2,12 @@
   "useMarkdownLinks": false,
   "newLinkFormat": "shortest",
   "attachmentFolderPath": "./",
-  "alwaysUpdateLinks": true
+  "alwaysUpdateLinks": true,
+  "userIgnoreFilters": [
+    "text/",
+    "originals/",
+    "templates/",
+    "intake/",
+    ".kb/"
+  ]
 }

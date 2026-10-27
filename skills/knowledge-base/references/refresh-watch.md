@@ -30,6 +30,16 @@
 2. Write a short "what changed" note linking the records. For example, "team X pushed a new module to repo Y that adds Z", with the commit range.
 3. Promote anything important into evidence or a source capture.
 
+## Reviewing past watch changes
+
+Watches only record *that* something changed. To interpret everything since the last review:
+
+1. Find the newest topic tagged or titled as a watch review and read its `reviewed_through` (none: start from the beginning).
+2. `kb watch events --since <reviewed_through> --json`, then group by record.
+3. Per repo event, read what changed in the mirror (`~/.local/share/kb/clones/<host>/<owner>/<repo>.git`): `git log --stat <old>..<new>`, then `git log -p` for anything that looks relevant. For releases, read the release notes. Page events can't be reviewed after the fact (only a hash is kept); recapture the page if it matters.
+4. Judge relevance against what the vault is for (README.md) and the entity's notes. Promote what matters: a fact on the entity (cite the commit range), a new capture (`kb capture <url>`), an evidence item, or an output.
+5. Write a topic `watch-review-<date>` with `reviewed_through: <time of the last event covered>`: per entity, what changed, whether it matters and why, with commit ranges. Say "routine" plainly for noise.
+
 ## Snapshots of the whole vault
 
 `kb snapshot <name> -m "morning of the event"` tags the vault's git repo as `kb/<name>`. `--all` tags every registered vault you may access. `git checkout kb/<name>` later shows exactly what was known then.

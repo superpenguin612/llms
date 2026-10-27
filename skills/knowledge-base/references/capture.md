@@ -5,6 +5,7 @@
 ```sh
 kb capture https://example.com/post          # web page (raw HTML + headers, text via trafilatura)
 kb capture ./report.pdf --kind pdf           # local file (PDF, Office, image, subtitles, text)
+kb capture ./other.pdf --id existing-id --recapture   # same work, new file: add a capture (without --recapture a different file under an existing id is refused)
 kb capture https://github.com/owner/repo     # repo: clone into the clones root, README + tree + commit
 kb capture https://github.com/owner/repo --ref dev   # repo at a branch, tag, pull/N/head or full sha: its own card
 kb capture https://youtu.be/…                # video: info + subtitles, no media

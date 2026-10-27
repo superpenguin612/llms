@@ -1,6 +1,8 @@
 import contextlib
 import io
 
+from unittest import mock
+
 import yaml
 
 from kb import cli
@@ -47,3 +49,11 @@ class TestRegistry(VaultTestCase):
         self.assertIn("git", out)
         self.assertIn("vault: demo", out)
         self.assertIn("may not read it", out)
+
+    def test_doctor_markitdown_extras(self):
+        import importlib.util
+        real = importlib.util.find_spec
+        with mock.patch("importlib.util.find_spec", lambda m, *a: None if m == "mammoth" else real(m, *a)), \
+                contextlib.chdir(self.tmp):
+            code, out = run("doctor")
+        self.assertRegex(out, r"--  markitdown docx  \(optional; pip install 'markitdown\[docx,xlsx,pptx\]'\)")

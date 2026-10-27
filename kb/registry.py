@@ -15,6 +15,10 @@ PY_DEPS = [("trafilatura", ["trafilatura"], "pip install trafilatura"),
            ("pymupdf", ["pymupdf", "fitz"], "pip install pymupdf"),
            ("markitdown", ["markitdown"], "pip install markitdown"),
            ("Pillow", ["PIL"], "pip install Pillow")]
+# markitdown converters that need extras: (name, modules that must all import)
+MARKITDOWN_EXTRAS = [("markitdown docx", ["mammoth"]), ("markitdown xlsx", ["pandas", "openpyxl"]),
+                     ("markitdown pptx", ["pptx"])]
+MARKITDOWN_HINT = "pip install 'markitdown[docx,xlsx,pptx]'"
 BIN_DEPS = [("yt-dlp", "pip install yt-dlp"), ("tesseract", "apt install tesseract-ocr"), ("git", "apt install git"),
             ("rg", "apt install ripgrep"), ("node", "apt install nodejs")]
 
@@ -102,6 +106,8 @@ def cmd_remove(args):
 
 def cmd_doctor(args):
     deps = [{"name": n, "ok": any(importlib.util.find_spec(m) for m in mods), "hint": h} for n, mods, h in PY_DEPS]
+    deps += [{"name": n, "ok": all(importlib.util.find_spec(m) for m in mods), "hint": MARKITDOWN_HINT}
+             for n, mods in MARKITDOWN_EXTRAS]
     deps += [{"name": n, "ok": bool(shutil.which(n)), "hint": h} for n, h in BIN_DEPS]
     reg = load_registry()
     entries = [{"kind": k[:-1], "name": n, "path": e.get("path"),

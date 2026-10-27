@@ -260,3 +260,13 @@ class TestCaptureRepoVideo(CaptureCase):
         with mock.patch("subprocess.run", side_effect=FileNotFoundError):
             with self.assertRaisesRegex(KBError, "pip install yt-dlp"):
                 capture.capture_url(self.v, "https://www.youtube.com/watch?v=abc")
+
+
+class TestIds(VaultTestCase):
+    def test_short_id_and_url_title(self):
+        from kb.capture import _url_title, short_id
+        self.assertEqual(short_id("ED 20-04: Mitigate Netlogon Elevation of Privilege Vulnerability"),
+                         "ed-20-04-mitigate-netlogon-elevation-of")
+        self.assertLessEqual(len(short_id("x" * 90)), 40)
+        self.assertEqual(_url_title("https://www.example.com/uploads/whitepapers/Zerologon.pdf"), "Zerologon")
+        self.assertEqual(_url_title("https://www.example.com/"), "www.example.com")

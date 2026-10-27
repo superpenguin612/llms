@@ -275,6 +275,23 @@ def _drop_none(d: dict) -> dict:
 
 # --- the capture ----------------------------------------------------------------------
 
+def short_id(title: str, max_len: int = 40) -> str:
+    """Slug of the title, cut at a word boundary to at most max_len characters."""
+    slug = slugify(title, 200)
+    if len(slug) <= max_len:
+        return slug
+    head = slug[:max_len + 1]
+    cut = head.rsplit("-", 1)[0] if "-" in head else ""
+    return cut if len(cut) >= 12 else slug[:max_len].rstrip("-")
+
+
+def _url_title(url: str) -> str:
+    """Fallback title: the URL's last path segment without extension, else the host."""
+    u = urllib.parse.urlparse(url)
+    stem = Path(urllib.parse.unquote(u.path.rstrip("/"))).stem
+    return stem if re.search(r"[A-Za-z]{3}", stem or "") else (u.hostname or url)
+
+
 def capture_url(vault, url, id=None, type="source", kind=None, obtained_from=None) -> Record:
     return _capture(vault, url, True, id, type, kind, obtained_from)[0]
 
@@ -328,9 +345,9 @@ def _capture(vault, src, is_url, id=None, type="source", kind=None, obtained_fro
         else:
             text, meta, ek = got.text, got.meta, None
         title = (existing.title if existing else None) or got.title or meta.get("title") or \
-            (urllib.parse.urlparse(src).hostname if is_url else Path(src).stem)
+            (_url_title(src) if is_url else Path(src).stem)
         card_kind = kind or got.kind or CARD_KIND.get(Path(got.main).suffix.lower()) or CARD_KIND.get(ek)
-        rid = existing.id if existing else (id or vault.new_id(slugify(title)))
+        rid = existing.id if existing else (id or vault.new_id(short_id(title)))
 
         final_dir = _date_dir(vault.root / "originals" / rid)
         final_dir.parent.mkdir(parents=True, exist_ok=True)

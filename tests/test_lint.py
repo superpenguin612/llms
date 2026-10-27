@@ -7,7 +7,7 @@ from tests.fixtures_kb import quiet_main
 from kb.lint import Linter
 from kb.vault import open_vault
 from tests.fixtures_kb import cd, sample_vault
-from tests.helpers import VaultTestCase
+from tests.helpers import VaultTestCase, make_vault
 
 
 def rules(root, **kw):
@@ -70,3 +70,22 @@ class TestLint(VaultTestCase):
         self.assertEqual(quiet_main("build")[0], 0)
         self.assertEqual(quiet_main("lint", "--strict", "--deep")[0], 0)
         self.assertIn("] lint | example | 0 errors", (root / "log.md").read_text())
+
+
+class TestOriginalsTree(VaultTestCase):
+    def test_orphan_and_modified_originals(self):
+        import subprocess
+        from kb.lint import Linter
+        from kb.vault import open_vault
+        root = make_vault(self.tmp / "v", records={
+            "sources/a.md": ({"type": "source", "title": "A", "kind": "pdf", "tier": "primary",
+                              "originals": [{"path": "originals/a/2026-01-01/a.txt", "sha256": "x"}]}, "\n# A\n")},
+            files={"originals/a/2026-01-01/a.txt": "one", "originals/stray.bin": b"x"})
+        g = ["git", "-C", str(root), "-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false"]
+        subprocess.run(["git", "init", "-q", str(root)], check=True)
+        subprocess.run(g + ["add", "-A"], check=True)
+        subprocess.run(g + ["commit", "-qm", "init"], check=True)
+        (root / "originals/a/2026-01-01/a.txt").write_text("two")
+        rules = {(f.rule, f.path) for f in Linter(open_vault(start=root)).run()}
+        self.assertIn(("orphan-original", "originals/stray.bin"), rules)
+        self.assertIn(("immutable", "originals/a/2026-01-01/a.txt"), rules)

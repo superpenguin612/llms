@@ -6,6 +6,7 @@ hints from the tool (title, issued, author) that the agent should confirm, and o
 
 import importlib
 import importlib.metadata
+import json
 import re
 import tempfile
 from pathlib import Path
@@ -197,7 +198,13 @@ def _text(path):
 
 
 def _code(path):
-    lines = _read_text(path).split("\n")
+    raw = _read_text(path)
+    if path.suffix.lower() == ".json" or raw.lstrip()[:1] in ("{", "["):
+        try:  # pretty-print so JSON (API captures) can be quoted line by line
+            raw = json.dumps(json.loads(raw), indent=2, ensure_ascii=False)
+        except ValueError:
+            pass
+    lines = raw.split("\n")
     parts = []
     for i in range(0, len(lines), CODE_EVERY):
         # bare fences: no H1s from '#' comments, and the markers vanish under util.normalize

@@ -2,6 +2,7 @@
 
 import os
 import re
+import subprocess
 import time
 from collections import defaultdict
 from dataclasses import asdict, dataclass
@@ -59,6 +60,7 @@ class Linter:
         for rec in v.records:
             self.check_record(rec)
         self.check_files()
+        self.check_originals_tree()
         self.check_intake()
         self.check_local_links()
         if self.strict:
@@ -209,6 +211,36 @@ class Linter:
                 if o.get("sha256") and sha256_file(p) != o["sha256"]:
                     self.err("fixity", rec.rel, f"original {o['path']} sha256 differs from the record; originals are "
                                                 f"immutable: restore it from git")
+
+    def check_originals_tree(self):
+        """Originals are written only by kb: every file under originals/ must be listed by a record,
+        and git-tracked originals (including evidence files) must not be modified or deleted."""
+        listed = {str(o["path"]) for r in self.v.records for o in r.fm.get("originals") or []
+                  if isinstance(o, dict) and o.get("path")}
+        odir = self.v.root / "originals"
+        if odir.is_dir():
+            for p in sorted(odir.rglob("*")):
+                rel = self.v.rel(p)
+                if p.is_file() and rel not in listed:
+                    self.err("orphan-original", rel, "file under originals/ that no record lists; originals are "
+                                                     "written only by kb (capture, triage, watch snapshot): remove it "
+                                                     "or capture it properly")
+        try:
+            out = subprocess.run(["git", "-C", str(self.v.root), "status", "--porcelain", "--no-renames", "--",
+                                  *sorted(listed | {"originals"})],
+                                 capture_output=True, text=True, timeout=60)
+        except (OSError, subprocess.TimeoutExpired):
+            return
+        if out.returncode != 0:
+            return  # not a git repo
+        top = subprocess.run(["git", "-C", str(self.v.root), "rev-parse", "--show-toplevel"],
+                             capture_output=True, text=True).stdout.strip()
+        for line in out.stdout.splitlines():
+            code, path = line[:2], line[3:]
+            if "M" in code or "D" in code:
+                rel = os.path.relpath(os.path.join(top, path), self.v.root)
+                self.err("immutable", rel, "a committed original was modified or deleted; originals never change: "
+                                           "restore it with `git checkout -- <file>` (recapture to add a new version)")
 
     def check_excerpts(self, rec):
         tp = build.text_path(self.v, rec)

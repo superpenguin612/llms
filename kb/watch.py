@@ -63,11 +63,15 @@ def mirror_path(url: str) -> Path:
     return capture.clones_root() / host / owner / f"{repo}.git"
 
 
+# explicit refspecs, so --prune only touches what the remote has and never kb's refs/kb/* pins
+MIRROR_REFSPECS = ("+refs/heads/*:refs/heads/*", "+refs/tags/*:refs/tags/*", "+refs/pull/*:refs/pull/*")
+
+
 def fetch_mirror(vault, url) -> Path:
     """Clone or fetch a bare mirror under the clones root (see kb.capture.clones_root)."""
     path = mirror_path(url)
     if (path / "HEAD").exists():
-        _git("fetch", "--prune", "--quiet", "origin", cwd=path, timeout=600)
+        _git("fetch", "--prune", "--quiet", "origin", *MIRROR_REFSPECS, cwd=path, timeout=600)
     else:
         path.parent.mkdir(parents=True, exist_ok=True)
         _git("clone", "--mirror", "--quiet", url, str(path), timeout=1200)
@@ -79,6 +83,12 @@ def _short(ref: str) -> str:
         if ref.startswith(p):
             return label + ref[len(p):]
     return ref
+
+
+def _pin(mirror, sha) -> str:
+    """Keep a commit the remote dropped (force-push, deleted branch) as refs/kb/<sha>; a summary suffix."""
+    ok = _git("update-ref", f"refs/kb/{sha}", sha, cwd=mirror, check=False).returncode == 0
+    return "; old head pinned" if ok else ""
 
 
 # --- checkers: (vault, value, old_state) -> (state, [(summary, detail)]) --------------
@@ -104,14 +114,14 @@ def check_git(vault, url, old):
         if a is None:
             changes.append((f"new {'branch ' * ref.startswith('refs/heads/')}{name} ({b[:7]})", detail))
         elif b is None:
-            changes.append((f"{name} deleted (was {a[:7]})", detail))
+            changes.append((f"{name} deleted (was {a[:7]}{_pin(mirror, a)})", detail))
         elif a != b:
             summary = f"{name}: {a[:7]} → {b[:7]}"
             if mirror:
                 anc = _git("merge-base", "--is-ancestor", a, b, cwd=mirror, check=False).returncode
                 if anc == 1:
                     detail["forced"] = True
-                    summary += " (force-push)"
+                    summary += f" (force-push{_pin(mirror, a)})"
                 elif anc == 0:
                     subjects = _git("log", "--format=%s", f"{a}..{b}", cwd=mirror, check=False).stdout.splitlines()
                     detail.update(commits=len(subjects), subjects=subjects[:20])

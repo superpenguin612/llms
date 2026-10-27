@@ -70,7 +70,7 @@ class TestWatch(VaultTestCase):
         self.assertEqual(r1["records"][0]["baseline"], ["git:https://github.com/rival/tool"])
         self.assertEqual(r1["records"][0]["changes"], [])
         sums = [c["summary"] for c in r2["records"][0]["changes"]]
-        self.assertEqual(sums, ["new branch dev (aaaaaaa)", "main: aaaaaaa → bbbbbbb (1 commit: one)", "tag v1 deleted (was ccccccc)"])
+        self.assertEqual(sums, ["new branch dev (aaaaaaa)", "main: aaaaaaa → bbbbbbb (1 commit: one)", "tag v1 deleted (was ccccccc; old head pinned)"])
         rec = read_record(v.root / "entities/team/rival.md")
         self.assertIn("last_checked", rec.fm)
         self.assertRegex(rec.body, r"## Timeline\n- \d{4}-\d\d-\d\d \d\d:\d\dZ — new branch dev")
@@ -177,6 +177,54 @@ class TestWatch(VaultTestCase):
         os.environ["XDG_DATA_HOME"] = "/xdg"
         self.addCleanup(os.environ.pop, "XDG_DATA_HOME", None)
         self.assertEqual(watch.mirror_path("https://github.com/o/r").as_posix(), "/xdg/kb/clones/github.com/o/r.git")
+
+
+class TestWatchRealGit(VaultTestCase):
+    """A local repo as the remote: rewritten history stays in the mirror."""
+
+    def setUp(self):
+        super().setUp()
+        p = mock.patch.dict(os.environ, GIT_ENV)
+        p.start()
+        self.addCleanup(p.stop)
+        self.src = self.tmp / "src"
+        self.src.mkdir()
+        self.git("init", "-q", "-b", "main")
+        self.v = open_vault(start=make_vault(self.tmp / "v", records=dict([entity("rival", [f"git:{self.src.as_uri()}"])])))
+
+    def git(self, *args, cwd=None):
+        return subprocess.run(["git", "-C", str(cwd or self.src), *args], check=True, capture_output=True, text=True).stdout
+
+    def commit(self, files, msg, rm=()):
+        for name, text in files.items():
+            (self.src / name).parent.mkdir(parents=True, exist_ok=True)
+            (self.src / name).write_text(text)
+        for name in rm:
+            (self.src / name).unlink()
+        self.git("add", "-A")
+        self.git("-c", "commit.gpgsign=false", "commit", "-q", "-m", msg)
+        return self.git("rev-parse", "HEAD").strip()
+
+    def test_force_push_and_deleted_branch_are_pinned(self):
+        base = self.commit({"a.txt": "a"}, "base")
+        old = self.commit({"b.txt": "b"}, "to be rewritten")
+        self.git("branch", "dev")
+        watch.run(self.v, alert=False)  # baseline + mirror
+        mirror = watch.mirror_path(self.src.as_uri())
+        self.git("update-ref", "refs/recovered/x", base, cwd=mirror)  # a foreign ref in the mirror
+        self.git("reset", "-q", "--hard", base)
+        self.commit({"c.txt": "c"}, "rewritten")
+        self.git("branch", "-D", "dev")
+        self.v.reload()
+        sums = [c["summary"] for c in watch.run(self.v, all_=True, alert=False)["records"][0]["changes"]]
+        self.assertIn(f"dev deleted (was {old[:7]}; old head pinned)", sums)
+        self.assertTrue(any("force-push; old head pinned" in s for s in sums), sums)
+        self.v.reload()
+        watch.run(self.v, all_=True, alert=False)  # a later --prune fetch keeps the pin
+        self.git("gc", "-q", "--prune=now", cwd=mirror)
+        refs = self.git("for-each-ref", "--format=%(refname)", cwd=mirror).split()
+        self.assertTrue({f"refs/kb/{old}", "refs/recovered/x"} <= set(refs), refs)
+        self.assertNotIn("refs/heads/dev", refs)  # --prune still follows the remote
 
 
 class TestWatchSnapshot(VaultTestCase):

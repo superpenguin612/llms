@@ -7,3 +7,6 @@
 [submodule "vendor/humanizer"]
 	path = vendor/humanizer
 	url = https://github.com/blader/humanizer
+[submodule "vendor/mattpocock-skills"]
+	path = vendor/mattpocock-skills
+	url = https://github.com/mattpocock/skills

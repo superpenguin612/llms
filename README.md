@@ -79,6 +79,7 @@ Third-party skills are pinned as git submodules in `vendor/` (updates only when 
 | `vendor/superpowers` | obra/superpowers: brainstorming, plans, TDD, systematic debugging, verification, worktrees, code review, writing skills |
 | `vendor/ponytail` | smallest-complete-change coding style, plus review/audit/debt skills |
 | `vendor/humanizer` | remove AI-writing patterns from prose |
+| `vendor/mattpocock-skills` | mattpocock/skills; only `grilling` (hard design-tree interviews) is linked |
 
 `git submodule update --init`, then `contrib/link-skills` links them (and `knowledge-base`) into `~/.codex/skills` and `~/.claude/skills`. In Claude Code, superpowers and ponytail are installed as plugins instead (`claude plugin install …`), because their plugins carry hooks.
 

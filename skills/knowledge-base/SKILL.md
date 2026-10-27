@@ -42,6 +42,8 @@ A **vault** is a folder with `kb.yaml` (its profile). It is also an Obsidian vau
 
 ## Setting up a new vault
 
+**Interview the owner first** ([references/setup.md](references/setup.md)): purpose, scope, consumers, access, sources, types, tiers, tags, events, watching, outputs, layout. The profile and README come from the answers.
+
 ```sh
 kb init path/to/vault --profile generic|competition|agent-vault --name NAME
 kb registry add NAME path/to/vault          # so other repos and agents can use --vault NAME

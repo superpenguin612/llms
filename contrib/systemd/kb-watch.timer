@@ -1,9 +1,9 @@
 [Unit]
-Description=Hourly kb watch runs
+Description=kb watch tick every 15 minutes (each record runs at its own watch_every)
 
 [Timer]
-OnCalendar=hourly
-RandomizedDelaySec=5m
+# Ticks must be shorter than the shortest watch_every; a tick with nothing due makes no network calls.
+OnCalendar=*:0/15
 Persistent=true
 
 [Install]

@@ -8,7 +8,7 @@ access: shared            # shared: any agent may read it. local: local-model ag
 tiers: [official, organizer, red-team, competitor, community, vendor, synthetic]
 tags: {}                  # controlled vocabulary, name: "meaning"; add deliberately with `kb tags add`
 
-scope_fields: {season: year, event: string}
+scope_fields: {season: int, event: string}
 phases: [recon, exploit, post-ex, cracking, report, infra, conduct, inject]
 contexts: []              # e.g. [{id: 2026-event}] -> evidence/<context>/
 events: []                # e.g. [{id: 2026-event, date: 2026-10-24}] (drives before-event refresh)

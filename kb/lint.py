@@ -168,7 +168,7 @@ class Linter:
         for k in ["title", *td.required]:
             if fm.get(k) in (None, "", []):
                 self.err("required", rel, f"missing required key {k!r}")
-        for k, spec in td.keys.items():
+        for k, spec in {**(prof.get("scope_fields") or {}), **td.keys}.items():
             if fm.get(k) not in (None, ""):
                 msg = check_value(spec, fm[k])
                 if msg:

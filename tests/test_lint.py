@@ -41,6 +41,18 @@ class TestLint(VaultTestCase):
         self.assertEqual(len(v.load_errors), 1)  # broken.md is reported by the yaml rule
         self.assertIn(("error", "yaml"), found)
 
+    def test_scope_fields_checked(self):
+        scope = {"season": "int", "event": "string", "region": ["east", "other"]}
+        root = sample_vault(self.tmp / "v", overrides={"scope_fields": scope}, records={
+            "topics/ok.md": ({"type": "topic", "title": "Ok", "season": 2026, "region": "east"}, "\n[[foxes]]\n"),
+            "topics/bad.md": ({"type": "topic", "title": "Bad", "season": "x", "region": "zz"}, "\n[[foxes]]\n")})
+        msgs = sorted((f.path, f.message) for f in Linter(open_vault(start=root)).run() if f.rule == "value")
+        self.assertEqual([m[0] for m in msgs], ["topics/bad.md", "topics/bad.md"])
+        self.assertTrue(any(m[1].startswith("region: 'zz' is not one of") for m in msgs), msgs)
+        from kb.util import KBError
+        with self.assertRaisesRegex(KBError, "scope_fields.season: use one of"):
+            open_vault(start=sample_vault(self.tmp / "w", overrides={"scope_fields": {"season": "year"}}))
+
     def test_warnings(self):
         old = time.time() - 10 * 86400
         root = sample_vault(self.tmp / "v", overrides={"caps": {"warn_mb": 0.000001}}, records={

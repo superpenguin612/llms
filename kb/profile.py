@@ -95,6 +95,17 @@ class Profile:
         return self.types[name]
 
 
+def _check_specs(where: str, specs) -> None:
+    if not isinstance(specs, dict):
+        raise KBError(f"kb.yaml {where} must be a mapping of key: spec")
+    for k, ks in specs.items():
+        if isinstance(ks, list) and any(isinstance(x, bool) for x in ks):
+            raise KBError(f"kb.yaml {where}.{k}: YAML read yes/no/true/false as booleans; "
+                          f"quote them (\"yes\") or use other words")
+        if not (isinstance(ks, list) or ks in SCALAR_SPECS):
+            raise KBError(f"kb.yaml {where}.{k}: use one of {', '.join(SCALAR_SPECS)} or an enum list")
+
+
 def _typedef(name: str, spec: dict) -> TypeDef:
     if not isinstance(spec, dict):
         raise KBError(f"kb.yaml types.{name} must be a mapping")
@@ -104,12 +115,7 @@ def _typedef(name: str, spec: dict) -> TypeDef:
         if trait in spec and spec[trait] not in allowed:
             raise KBError(f"kb.yaml types.{name}.{trait}: {spec[trait]!r} is not one of {', '.join(allowed)}")
     keys = spec.get("keys") or {}
-    for k, ks in keys.items():
-        if isinstance(ks, list) and any(isinstance(x, bool) for x in ks):
-            raise KBError(f"kb.yaml types.{name}.keys.{k}: YAML read yes/no/true/false as booleans; "
-                          f"quote them (\"yes\") or use other words")
-        if not (isinstance(ks, list) or ks in SCALAR_SPECS):
-            raise KBError(f"kb.yaml types.{name}.keys.{k}: use one of {', '.join(SCALAR_SPECS)} or an enum list")
+    _check_specs(f"types.{name}.keys", keys)
     for c in ("refresh", "watch_every"):
         if c in spec:
             parse_cadence(spec[c])
@@ -132,6 +138,7 @@ def parse_profile(data: dict) -> Profile:
                       f"run a matching kb version or migrate the vault")
     if data.get("access", "shared") not in ("shared", "local"):
         raise KBError("kb.yaml access must be 'shared' or 'local'")
+    _check_specs("scope_fields", data.get("scope_fields") or {})
     types = data.get("types") or {}
     if not types:
         raise KBError("kb.yaml defines no types; copy them from a starter profile (kb init --profile generic)")

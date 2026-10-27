@@ -18,7 +18,7 @@
 | `status` | `active` (default) · `draft` · `stale` · `superseded` · `implemented` |
 | `superseded_by`, `aliases`, `updated` | as needed (`updated` on internal records) |
 | `tags` | only tags defined in kb.yaml `tags:` (`name: "meaning"`). Lint rejects anything else. A new tag is a deliberate decision: check `kb tags` first, and add one only when no existing tag fits, with `kb tags add NAME "meaning"` (agents: propose it to the user first). |
-| scope fields | as the profile's `scope_fields` declare (e.g. `season`, `event`) |
+| scope fields | as the profile's `scope_fields` declare (e.g. `season: int`, `region: [east, west]`); same specs as type `keys`, checked by lint on every record |
 
 ## By trait
 

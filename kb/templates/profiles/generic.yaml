@@ -8,7 +8,7 @@ access: shared            # shared: any agent may read it. local: local-model ag
 tiers: [official, primary, secondary, community, vendor, synthetic]
 tags: {}                  # controlled vocabulary, name: "meaning"; add deliberately with `kb tags add`
 
-scope_fields: {}          # e.g. {season: year, region: [east, west]}
+scope_fields: {}          # e.g. {season: int, region: [east, west]}
 phases: []                # e.g. [recon, exploit, report] for evidence
 contexts: []              # e.g. [{id: 2026-event}] -> evidence/<context>/
 events: []                # e.g. [{id: 2026-event, date: 2026-10-24}] (drives before-event refresh)

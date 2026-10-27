@@ -17,6 +17,8 @@ class TestUtil(VaultTestCase):
         self.assertEqual(excerpt_in_text("The redteam prefers persistence not defacement", text), "loose")
         self.assertEqual(excerpt_in_text("something else", text), "missing")
         self.assertEqual(normalize("**Bold** `code`"), "bold code")
+        wrapped = "[p2]\nuses AES-\nCFB8 mode and HKLM\\SECURITY\\Policy\\\nSecrets keys"
+        self.assertEqual(excerpt_in_text("uses AES-CFB8 mode and HKLM\\SECURITY\\Policy\\Secrets keys", wrapped), "exact")
         linked = "See the [scoring guide](https://example.com/a_(b)) for ![logo](x.png) details."
         self.assertEqual(excerpt_in_text("See the scoring guide for logo details.", linked), "exact")
 

@@ -142,6 +142,7 @@ def normalize(text: str) -> str:
     t = _MDLINK.sub(r"\1", t)  # [text](url) and ![alt](src) -> text; extractors keep links
     t = _ANCHOR.sub(" ", t)
     t = _MD.sub("", t)
+    t = re.sub(r"(?<=\S)([-\\/])[ \t]*\n\s*(?=\S)", r"\1", t)  # rejoin "AES-\nCFB8", "Policy\\\nSecrets" wraps
     return re.sub(r"\s+", " ", t).strip().casefold()
 
 

@@ -54,8 +54,29 @@ class TestExtract(VaultTestCase):
         with mock.patch("kb.ocr.available", return_value=True), \
                 mock.patch("kb.ocr.ocr_image", return_value=("scanned words here", [])):
             text, meta = extract.extract(p)
-        self.assertIn("[p2]\nscanned words here", text)
+        self.assertIn("[p2 ocr]\nscanned words here", text)
         self.assertEqual((meta["text_quality"], meta["ocr_pages"]), ("mixed", [2]))
+
+    @skipUnless(HAS["pymupdf"], "pymupdf not installed")
+    def test_pdf_image_page_keeps_text_and_adds_ocr(self):
+        import pymupdf
+        p = self.tmp / "diagram.pdf"
+        make_pdf(p, pages=("Plain text page with plenty of words in its text layer.",
+                           "Caption text above a big embedded diagram image."))
+        doc = pymupdf.open(p)
+        pix = pymupdf.Pixmap(pymupdf.csRGB, pymupdf.IRect(0, 0, 50, 50))
+        pix.clear_with(200)
+        doc[1].insert_image(pymupdf.Rect(36, 100, 560, 700), pixmap=pix)
+        doc.saveIncr()
+        with mock.patch("kb.ocr.available", return_value=True), \
+                mock.patch("kb.ocr.ocr_image", return_value=("web01 10.0.0.5", [])) as m:
+            text, meta = extract.extract(p)
+        self.assertEqual(m.call_count, 1)
+        self.assertIn("[p2]\nCaption text", text)
+        self.assertIn("[p2 ocr]\nweb01 10.0.0.5", text)
+        self.assertNotIn("[p1 ocr]", text)
+        self.assertEqual((meta["text_quality"], meta["ocr_pages"]), ("mixed", [2]))
+        self.assertEqual(excerpt_in_text("Caption text above a big embedded diagram image. web01 10.0.0.5", text), "exact")
 
     def test_code_single_block(self):
         p = self.tmp / "tool.py"

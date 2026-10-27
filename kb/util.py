@@ -125,7 +125,7 @@ _FOLD = str.maketrans({
     "‐": "-", "‑": "-", "‒": "-", "–": "-", "—": "-", "―": "-", "−": "-",
     " ": " ", " ": " ", " ": " ", "…": "...",
 })
-_ANCHOR = re.compile(r"\[(?:p\d+|slide \d+|\d{1,2}:\d{2}(?::\d{2})?|L\d+)\]", re.I)
+_ANCHOR = re.compile(r"\[(?:p\d+(?: ocr)?|slide \d+|\d{1,2}:\d{2}(?::\d{2})?|L\d+)\]", re.I)
 _MD = re.compile(r"(\*\*|__|\*|`+|~~)")
 _QUOTE_MARK = re.compile(r"(?m)^\s*>\s?")
 _CTRL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f​-‍⁠﻿]")

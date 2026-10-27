@@ -32,6 +32,7 @@ ALIASES = {"webpage": "html", "blog-post": "html", "slides": "office", "office-d
 INSTALL = {"trafilatura": "pip install trafilatura", "pymupdf": "pip install pymupdf",
            "markitdown": "pip install 'markitdown[pptx,docx,xlsx]'"}
 PARA_SECONDS = 45
+IMAGE_SHARE = 0.3  # PDF pages with images over this share of the page are OCRed too
 
 
 def detect(path, kind=None) -> str:
@@ -127,25 +128,36 @@ def _html(path):
     return demote_headings(md), meta
 
 
+def _image_share(pymupdf, page) -> float:
+    """Share of the page area covered by embedded images (overlaps counted twice; capped at 1)."""
+    area = sum(abs(pymupdf.Rect(i["bbox"]) & page.rect) for i in page.get_image_info())
+    return min(1.0, area / abs(page.rect))
+
+
 def _pdf(path):
     pymupdf = _need("pymupdf")
     doc = pymupdf.open(path)
     parts, low, ocr_done = [], [], []
     with tempfile.TemporaryDirectory() as td:
         for i, page in enumerate(doc, 1):
-            t = page.get_text()
-            if len(t.strip()) < 20:
+            t = page.get_text().strip()
+            sparse = len(t) < 20
+            if sparse:
                 low.append(i)
-                if ocr.available():
-                    png = Path(td) / f"p{i}.png"
-                    page.get_pixmap(dpi=200).save(png)
-                    t = ocr.ocr_image(png)[0]
-                    ocr_done.append(i)
-            parts.append(f"[p{i}]\n{t.strip()}\n")
+            if (sparse or _image_share(pymupdf, page) >= IMAGE_SHARE) and ocr.available():
+                png = Path(td) / f"p{i}.png"
+                page.get_pixmap(dpi=250).save(png)
+                o = ocr.ocr_image(png)[0].strip()
+                ocr_done.append(i)
+                if o:
+                    parts.append((f"[p{i}]\n{t}\n\n" if t else "") + f"[p{i} ocr]\n{o}\n")
+                    continue
+            parts.append(f"[p{i}]\n{t}\n")
     meta = {"extracted_with": f"pymupdf {pymupdf.__version__}" + (" + tesseract" if ocr_done else ""),
             "anchors": "pages", "pages": len(parts)}
     if low:
         meta["needs_ocr"] = low
+    if low or ocr_done:
         meta["ocr_pages"] = ocr_done
         meta["text_quality"] = ("ocr" if len(ocr_done) == len(parts) else "mixed") if ocr_done else "partial"
     info = doc.metadata or {}

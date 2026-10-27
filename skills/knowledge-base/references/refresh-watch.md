@@ -14,8 +14,8 @@
 ## Watch: fast and cheap
 
 - **What:** records whose type has `tracked: watch` list targets in `watch:`:
-  - `git:<url>`: branches and tags by commit hash. On a force-push or deleted branch the old head is pinned as `refs/kb/<sha>` in the mirror ("old head pinned"), so the rewritten history stays readable there;
-  - `github-user:<login>`: new repos and pushes;
+  - `git:<url>`: branches and tags by commit hash. On a force-push or deleted branch the old head is pinned as `refs/kb/<sha>` in the mirror ("old head pinned"), so the rewritten history stays readable there. A branch that moved and lost files reports them ("deleted N files: …"; event detail `deleted`, `deleted_paths`);
+  - `github-user:<login>`: new repos, pushes and repos gone (event detail `deleted`);
   - `github-releases:<owner/repo>`;
   - `page:<url>`;
   - `feed:<url>`.

@@ -131,6 +131,11 @@ class TestWatch(VaultTestCase):
             r = watch.run(v, ["rival"], alert=False)
         self.assertEqual([c["summary"] for c in r["records"][0]["changes"]], ["rival/a pushed (2)", "new repo rival/b"])
 
+    def test_github_user_repo_gone_is_marked_deleted(self):
+        with mock.patch("kb.watch._gh", return_value=[]):
+            _, changes = watch.check_github_user(None, "rival", {"rival/a": "1"})
+        self.assertEqual(changes, [("repo rival/a gone (deleted, renamed or private)", {"repo": "rival/a", "deleted": True})])
+
     def test_feed_and_page(self):
         atom = (b'<feed xmlns="http://www.w3.org/2005/Atom"><entry><id>x1</id><title>Old</title></entry></feed>',
                 b'<feed xmlns="http://www.w3.org/2005/Atom"><entry><id>x2</id><title>New</title></entry>'
@@ -213,18 +218,26 @@ class TestWatchRealGit(VaultTestCase):
         mirror = watch.mirror_path(self.src.as_uri())
         self.git("update-ref", "refs/recovered/x", base, cwd=mirror)  # a foreign ref in the mirror
         self.git("reset", "-q", "--hard", base)
-        self.commit({"c.txt": "c"}, "rewritten")
+        self.commit({"c.txt": "c", **{f"x/{i}.txt": str(i) for i in range(5)}}, "rewritten")
         self.git("branch", "-D", "dev")
         self.v.reload()
-        sums = [c["summary"] for c in watch.run(self.v, all_=True, alert=False)["records"][0]["changes"]]
-        self.assertIn(f"dev deleted (was {old[:7]}; old head pinned)", sums)
-        self.assertTrue(any("force-push; old head pinned" in s for s in sums), sums)
+        ch = {c["detail"]["ref"]: c for c in watch.run(self.v, all_=True, alert=False)["records"][0]["changes"]}
+        self.assertEqual(ch["refs/heads/dev"]["summary"], f"dev deleted (was {old[:7]}; old head pinned)")
+        main = ch["refs/heads/main"]
+        self.assertRegex(main["summary"], r"\(force-push; old head pinned\); deleted 1 file: b\.txt$")
+        self.assertEqual((main["detail"]["deleted"], main["detail"]["deleted_paths"]), (1, ["b.txt"]))
+
+        # fast-forward that deletes files; a later --prune fetch keeps the pin
+        self.commit({}, "drop files", rm=["a.txt", *(f"x/{i}.txt" for i in range(4))])
         self.v.reload()
-        watch.run(self.v, all_=True, alert=False)  # a later --prune fetch keeps the pin
+        main = watch.run(self.v, all_=True, alert=False)["records"][0]["changes"][0]
+        self.assertTrue(main["summary"].endswith("; deleted 5 files: a.txt, x/0.txt, x/1.txt, … (+2)"), main["summary"])
+        self.assertEqual(main["detail"]["deleted"], 5)
         self.git("gc", "-q", "--prune=now", cwd=mirror)
         refs = self.git("for-each-ref", "--format=%(refname)", cwd=mirror).split()
         self.assertTrue({f"refs/kb/{old}", "refs/recovered/x"} <= set(refs), refs)
         self.assertNotIn("refs/heads/dev", refs)  # --prune still follows the remote
+        self.assertEqual(self.git("cat-file", "-t", old, cwd=mirror).strip(), "commit")
 
 
 class TestWatchSnapshot(VaultTestCase):

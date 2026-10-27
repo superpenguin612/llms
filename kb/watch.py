@@ -127,6 +127,13 @@ def check_git(vault, url, old):
                     detail.update(commits=len(subjects), subjects=subjects[:20])
                     summary += f" ({len(subjects)} commit{'s' * (len(subjects) != 1)}: " + "; ".join(subjects[:3]) \
                                + ("; …" if len(subjects) > 3 else "") + ")"
+            # files at the old head that the new one lacks: deleted content is worth a look
+            gone = _git("diff", "--no-renames", "--diff-filter=D", "--name-only", a, b, cwd=mirror, check=False)
+            paths = gone.stdout.splitlines() if gone.returncode == 0 else []
+            if paths:
+                detail.update(deleted=len(paths), deleted_paths=paths[:100])
+                summary += f"; deleted {len(paths)} file{'s' * (len(paths) != 1)}: " + ", ".join(paths[:3]) \
+                           + (f", … (+{len(paths) - 3})" if len(paths) > 3 else "")
             changes.append((summary, detail))
     return state, changes
 
@@ -143,7 +150,7 @@ def check_github_user(vault, login, old):
             changes.append((f"new repo {name}", {"repo": name, "pushed_at": pushed}))
         elif pushed != old[name]:
             changes.append((f"{name} pushed ({pushed})", {"repo": name, "old": old[name], "pushed_at": pushed}))
-    changes += [(f"repo {n} gone (deleted, renamed or private)", {"repo": n}) for n in old if n not in state]
+    changes += [(f"repo {n} gone (deleted, renamed or private)", {"repo": n, "deleted": True}) for n in old if n not in state]
     return state, changes
 
 

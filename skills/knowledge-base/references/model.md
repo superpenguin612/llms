@@ -54,7 +54,7 @@ A vault made by an older kb (nested `originals:` lists, machine-specific clone p
 ## Repos are two records
 
 A captured repo is a pair:
-- **The source card** (e.g. `repo-owner-tool`, type `source`, external): what the repo contained **at one commit**. It holds the README, the file list and verbatim excerpts pinned to that commit, valid forever even if the repo changes or disappears. Recapturing adds a dated capture to the same card. A busy repo never creates new cards on its own.
+- **The source card** (e.g. `repo-owner-tool`, type `source`, external): what the repo contained **at one commit**. It holds the README, the file list and verbatim excerpts pinned to that commit, valid forever even if the repo changes or disappears. Recapturing adds a dated capture to the same card. A busy repo never creates new cards on its own. Content off the default branch (a branch, tag, PR head or deleted commit) gets its own card with `kb capture <repo-url> --ref <ref>`.
 - **The project entity** (e.g. `owner-tool`, kind `project`, internal): the repo **as a living thing**. It holds our facts about it, links to its capture cards, and the `## Timeline` that `kb watch` appends to (new commits, tags, releases, force-pushes).
 
 `kb capture <repo-url>` creates the project entity if it's missing and links it from the card's `entities`. Add `--watch` to also watch the repo; many captured repos are one-off references that don't need it.

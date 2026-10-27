@@ -169,30 +169,55 @@ def _repo_parts(url):
     return (m.group(1) or "local").lower(), "/".join(parts[:-1]), parts[-1]
 
 
-def _fetch_repo(vault, url, stage):
+def _fetch_repo(vault, url, stage, ref=None):
+    """Clone or pull, then read the README, file list and commit at HEAD, or at `ref` (branch, tag, pull/N/head
+    or full sha; fetched from origin when the clone lacks it) without checking it out."""
     host, owner, name = _repo_parts(url)
-    ref = f"{host}/{owner}/{name}"
-    path = clones_root() / ref
+    rel = f"{host}/{owner}/{name}"
+    path = clones_root() / rel
+    git = ["git", "-C", str(path)]
     restored = not (path / ".git").exists()
     if restored:
         path.parent.mkdir(parents=True, exist_ok=True)
         _run(["git", "clone", "--quiet", url, str(path)])
+    elif not ref:
+        _run(git + ["pull", "--ff-only", "--quiet"])
+    if ref:
+        have = re.fullmatch(r"[0-9a-f]{40}", ref) and \
+            subprocess.run(git + ["cat-file", "-e", f"{ref}^{{commit}}"], capture_output=True).returncode == 0
+        if not have:
+            _run(git + ["fetch", "--quiet", "origin", ref])
+        commit = _run(git + ["rev-parse", f"{ref if have else 'FETCH_HEAD'}^{{commit}}"]).strip()
+        (stage / "tree.txt").write_text(_run(git + ["ls-tree", "-r", "--name-only", commit]), encoding="utf-8")
+        (stage / "commit.txt").write_text(_run(git + ["log", "-1", commit]), encoding="utf-8")
+        top = _run(git + ["ls-tree", "--name-only", commit]).splitlines()
+        readme = next(iter(sorted(n for n in top if n.startswith("README"))), None)
+        readme_text = _run(git + ["show", f"{commit}:{readme}"]) if readme else ""
+        if readme:
+            (stage / readme).write_text(readme_text, encoding="utf-8")
     else:
-        _run(["git", "-C", str(path), "pull", "--ff-only", "--quiet"])
-    commit = _run(["git", "-C", str(path), "rev-parse", "HEAD"]).strip()
-    (stage / "tree.txt").write_text(_run(["git", "-C", str(path), "ls-files"]), encoding="utf-8")
-    (stage / "commit.txt").write_text(_run(["git", "-C", str(path), "log", "-1"]), encoding="utf-8")
-    readme = next(iter(sorted(p for p in path.glob("README*") if p.is_file())), None)
-    readme_text = ""
-    if readme:
-        shutil.copy2(readme, stage / readme.name)
-        readme_text = readme.read_text(encoding="utf-8", errors="replace")
+        commit = _run(git + ["rev-parse", "HEAD"]).strip()
+        (stage / "tree.txt").write_text(_run(git + ["ls-files"]), encoding="utf-8")
+        (stage / "commit.txt").write_text(_run(git + ["log", "-1"]), encoding="utf-8")
+        readme = next(iter(sorted(p for p in path.glob("README*") if p.is_file())), None)
+        readme_text = ""
+        if readme:
+            shutil.copy2(readme, stage / readme.name)
+            readme_text = readme.read_text(encoding="utf-8", errors="replace")
+    _run(git + ["update-ref", f"refs/kb/{commit}", commit])  # a pinned commit survives gc even if the remote drops it
     version = _run(["git", "--version"]).strip().replace("git version ", "git ")
     canonical = url if _REPO.match(url) is None else re.sub(r"(\.git)?/?$", "", url)
-    return SimpleNamespace(main="commit.txt", fetched_url=url, http_status=None, via="git", final_url=canonical,
-                           dead=False, text=readme_text, title=f"{owner}/{name}", kind="repo",
-                           restored=restored, clone_path=path,
-                           meta={"extracted_with": version, "clone": f"clone:{ref}@{commit}", "commit": commit})
+    title, rid = f"{owner}/{name}", None
+    if ref:
+        # its own card: a URL per commit keeps URL dedup from merging it into the HEAD card
+        canonical = f"https://{host}/{owner}/{name}/tree/{commit}" if host in ("github.com", "gitlab.com", "codeberg.org") \
+            else f"{canonical}@{commit}"
+        label = commit[:10] if ref == commit else ref
+        title, rid = f"{title} @ {label}", f"{short_id(title)}-{slugify(label)}"
+    return SimpleNamespace(main="commit.txt", fetched_url=canonical if ref else url, http_status=None, via="git",
+                           final_url=canonical, dead=False, text=readme_text, title=title, kind="repo",
+                           restored=restored, clone_path=path, id=rid,
+                           meta={"extracted_with": version, "clone": f"clone:{rel}@{commit}", "commit": commit})
 
 
 # --- clones, capture manifests, dedup lookups ---------------------------------------------
@@ -323,13 +348,21 @@ def set_flat(fm: dict, original: str, sha256: str, captured: str) -> None:
 
 
 def _ensure_commit(path: Path, commit: str, warnings: list) -> None:
-    """Keep a pinned commit available in a clone (fetch it when a fresh clone lacks it)."""
-    if not commit or subprocess.run(["git", "-C", str(path), "cat-file", "-e", f"{commit}^{{commit}}"],
-                                    capture_output=True).returncode == 0:
+    """Keep a pinned commit available in a clone (fetch it when a fresh clone lacks it) and pin it as
+    refs/kb/<sha> so gc keeps it."""
+    if not commit:
         return
-    if subprocess.run(["git", "-C", str(path), "fetch", "--quiet", "origin", commit],
-                      capture_output=True).returncode != 0:
+    git = ["git", "-C", str(path)]
+    have = lambda: subprocess.run(git + ["rev-parse", "--verify", "--quiet", f"{commit}^{{commit}}"],
+                                  capture_output=True, text=True)
+    p = have()
+    if p.returncode and subprocess.run(git + ["fetch", "--quiet", "origin", commit], capture_output=True).returncode == 0:
+        p = have()
+    if p.returncode:
         warnings.append(f"pinned commit {commit[:12]} is no longer on the remote; repo excerpts at it can't be checked")
+        return
+    sha = p.stdout.strip()
+    subprocess.run(git + ["update-ref", f"refs/kb/{sha}", sha], capture_output=True)
 
 
 def _route(url, kind):
@@ -484,13 +517,13 @@ def capture_file(vault, path, id=None, type="source", kind=None, obtained_from=N
     return _capture(vault, path, False, id, type, kind, obtained_from)[0]
 
 
-def _capture(vault, src, is_url, id=None, type="source", kind=None, obtained_from=None, watch=False):
+def _capture(vault, src, is_url, id=None, type="source", kind=None, obtained_from=None, watch=False, ref=None):
     """Returns (record, change). change: {id, card, status: new|unchanged|same-text|changed, capture,
-    added, removed, gone, dead, warnings}."""
+    added, removed, gone, dead, warnings}. ref: capture a repo at that branch/tag/commit as its own card."""
     vault.reload()
     td = vault.profile.type(type)
     existing = vault.get(id) if id else None
-    if existing is None and is_url:
+    if existing is None and is_url and not ref:
         existing = find_by_url(vault, src)
     warn_b, max_b = _caps(vault)
     vault.kb_dir.joinpath("tmp").mkdir(exist_ok=True)
@@ -498,7 +531,8 @@ def _capture(vault, src, is_url, id=None, type="source", kind=None, obtained_fro
     warnings = []
     try:
         if is_url:
-            got = _route(src, kind or (existing.fm.get("kind") if existing else None))(vault, src, stage)
+            got = _fetch_repo(vault, src, stage, ref) if ref else \
+                _route(src, kind or (existing.fm.get("kind") if existing else None))(vault, src, stage)
         else:
             p = Path(src)
             if not p.is_file():
@@ -512,12 +546,14 @@ def _capture(vault, src, is_url, id=None, type="source", kind=None, obtained_fro
         if existing is None and got.final_url:
             existing = find_by_url(vault, got.final_url)
         main_sha = sha256_file(stage / got.main)
-        if existing is None:
+        if existing is None and not ref:
             existing = find_by_sha(vault, main_sha)
         restored = getattr(got, "restored", False) and existing is not None
-        if restored:
+        if restored:  # a fresh clone: fetch and pin the card's commit and every commit its excerpts quote
             old = parse_clone(existing.fm.get("text"))
-            _ensure_commit(got.clone_path, old[1] if old else "", warnings)
+            locs = [re.search(r"@\s*([0-9a-f]{4,40})\s*$", e.location) for e in parse_excerpts(existing.body)]
+            for c in dict.fromkeys([old[1] if old else "", *(m.group(1) for m in locs if m)]):
+                _ensure_commit(got.clone_path, c, warnings)
         if existing is not None:
             td = vault.typedef(existing) or td
             if main_sha in known_shas(vault, existing.id):
@@ -536,24 +572,25 @@ def _capture(vault, src, is_url, id=None, type="source", kind=None, obtained_fro
         title = (existing.title if existing else None) or got.title or meta.get("title") or \
             (_url_title(src) if is_url else Path(src).stem)
         card_kind = kind or got.kind or CARD_KIND.get(Path(got.main).suffix.lower()) or CARD_KIND.get(ek)
-        rid = existing.id if existing else (id or vault.new_id(short_id(title)))
+        rid = existing.id if existing else (id or vault.new_id(getattr(got, "id", None) or short_id(title)))
 
         final_dir = _date_dir(vault.root / "originals" / rid)
         final_dir.parent.mkdir(parents=True, exist_ok=True)
         os.replace(stage, final_dir)
         captured = iso(now_utc())
         manifest = write_manifest(final_dir, {
-            "captured": captured, "via": got.via, "given_url": src if is_url and src != got.fetched_url else None,
+            "captured": captured, "via": got.via, "given_url": src if is_url and src != got.fetched_url and not ref else None,
             "fetched_url": got.fetched_url, "http_status": got.http_status, "obtained_from": obtained_from,
             "main": got.main})
         _index_manifest(_index(vault), rid, manifest)
         originals = {"original": vault.rel(final_dir / got.main), "sha256": main_sha, "captured": captured}
         flags = inject.scan(text)
         args = SimpleNamespace(vault=vault, rid=rid, td=td, got=got, text=text, meta=meta, title=title,
-                               kind=card_kind, src=src if is_url else None, originals=originals, flags=flags,
+                               kind=card_kind, src=(got.final_url if ref else src) if is_url else None,
+                               originals=originals, flags=flags,
                                capture=vault.rel(final_dir), warnings=warnings)
         rec, change = _update(args, existing) if existing else _create(args)
-        append_log(vault.root, "capture", rid, f"{change['status']} {src if is_url else Path(src).name}")
+        append_log(vault.root, "capture", rid, f"{change['status']} {src if is_url else Path(src).name}" + (f" @ {ref}" if ref else ""))
         vault.reload()
         if card_kind == "repo" and is_url:
             ent = link_project_entity(vault, rec, src, watch=watch)
@@ -697,6 +734,8 @@ def register(subparsers, common):
     p.add_argument("--kind", help="source kind, e.g. webpage, pdf, repo, video (default: inferred)")
     p.add_argument("--obtained-from", help="where the file came from (recorded on the original)")
     p.add_argument("--watch", action="store_true", help="repos: also watch the repo for new commits (kb watch)")
+    p.add_argument("--ref", help="repos: capture this branch, tag, pull/N/head or full commit sha as its own card "
+                                 "(fetched from origin if the clone lacks it)")
     p.set_defaults(func=run)
 
 
@@ -715,8 +754,9 @@ def describe(c) -> str:
 
 def run(args) -> int:
     v = vaultmod.open_from_args(args)
-    is_url = bool(re.match(r"(?i)^https?://", args.target))
-    _, change = _capture(v, args.target, is_url, args.id, args.type, args.kind, args.obtained_from, watch=args.watch)
+    is_url = bool(re.match(r"(?i)^https?://", args.target)) or bool(args.ref)
+    _, change = _capture(v, args.target, is_url, args.id, args.type, args.kind, args.obtained_from, watch=args.watch,
+                         ref=args.ref)
     for w in change["warnings"]:
         print(f"kb capture: warning: {w}", file=sys.stderr)
     emit(args, change, describe(change))

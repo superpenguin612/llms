@@ -239,7 +239,7 @@ class TestCaptureRepoVideo(CaptureCase):
             return ""
         return fake_run({"clone": clone, "pull": lambda c: "", "rev-parse": lambda c: commit + "\n",
                          "ls-files": lambda c: "README.md\n", "log": lambda c: f"commit {commit}\n",
-                         "cat-file": lambda c: "", "--version": lambda c: "git version 2.43.0\n"})
+                         "cat-file": lambda c: "", "update-ref": lambda c: "", "--version": lambda c: "git version 2.43.0\n"})
 
     def test_repo_capture_portable_clone_and_restore(self):
         clones = self.tmp / "elsewhere"
@@ -313,3 +313,77 @@ class TestProjectEntity(VaultTestCase):
         self.assertEqual(v.get(eid).fm["watch"], ["git:https://github.com/o/a"])
         self.assertEqual(v.get("repo-a").fm["entities"], [f"[[{eid}]]"])
         self.assertEqual(link_project_entity(v, v.get("repo-b"), "https://github.com/o/b.git"), "known")
+
+
+class TestCaptureRepoRef(CaptureCase):
+    """Real git against a local remote: --ref cards, refs/kb pins, restore of excerpt commits."""
+
+    def setUp(self):
+        super().setUp()
+        p = mock.patch.dict(os.environ, {"GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1",
+                                         "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.com",
+                                         "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.com"})
+        p.start()
+        self.addCleanup(p.stop)
+        self.src = self.tmp / "src"
+        self.git("init", "-q", "-b", "main", str(self.src), cwd=None)
+        self.git("config", "uploadpack.allowAnySHA1InWant", "true")  # like GitHub: serves commits by sha
+        self.commit({"README.md": "# Tool\nmain readme\n"}, "one")
+
+    def git(self, *args, cwd=True):
+        return subprocess.run(["git", *(["-C", str(self.src)] if cwd else []), *args],
+                              check=True, capture_output=True, text=True).stdout.strip()
+
+    def commit(self, files, msg):
+        for name, text in files.items():
+            (self.src / name).write_text(text)
+        self.git("add", "-A")
+        self.git("-c", "commit.gpgsign=false", "commit", "-q", "-m", msg)
+        return self.git("rev-parse", "HEAD")
+
+    def test_ref_capture_is_its_own_card_and_pinned(self):
+        url = self.src.as_uri()
+        head, _ = capture._capture(self.v, url, True, kind="repo")
+        self.git("checkout", "-q", "-b", "dev")
+        dev = self.commit({"README.md": "# Tool\ndev readme\n", "extra.txt": "x\n"}, "dev work")
+        dangling = self.commit({"secret.txt": "y\n"}, "later removed")
+        self.git("reset", "-q", "--hard", dev)  # `dangling` is now on no branch
+        self.git("checkout", "-q", "main")
+        clone = Path(capture.parse_clone(head.fm["text"])[0])
+        subprocess.run(["git", "-C", str(clone), "update-ref", "refs/recovered/x", "HEAD"], check=True)  # foreign ref
+
+        rec, change = capture._capture(open_vault(start=self.root), url, True, ref="dev")
+        self.assertEqual(change["status"], "new")
+        self.assertEqual(rec.id, f"{head.id}-dev")
+        self.assertEqual((rec.fm["url"], rec.fm["text"]), (f"{url}@{dev}", head.fm["text"].rpartition("@")[0] + f"@{dev}"))
+        self.assertNotIn("given_url", rec.fm)
+        folder = self.root / Path(rec.fm["original"]).parent
+        self.assertIn("dev readme", (folder / "README.md").read_text())
+        self.assertIn("extra.txt", (folder / "tree.txt").read_text())
+        self.assertIn(dev, (folder / "commit.txt").read_text())
+        self.assertIn("main readme", (clone / "README.md").read_text())  # working tree not checked out
+
+        # a dangling commit by full sha: fetched, its own card, and pinned so gc keeps it
+        v = open_vault(start=self.root)
+        rec2, _ = capture._capture(v, url, True, ref=dangling)
+        self.assertEqual(rec2.id, f"{head.id}-{dangling[:10]}")
+        subprocess.run(["git", "-C", str(clone), "gc", "-q", "--prune=now"], check=True)
+        refs = subprocess.run(["git", "-C", str(clone), "for-each-ref", "--format=%(refname)"],
+                              capture_output=True, text=True).stdout.split()
+        self.assertTrue({f"refs/kb/{dangling}", f"refs/kb/{dev}", "refs/recovered/x"} <= set(refs))
+        # HEAD capture still finds the HEAD card, not a --ref card
+        self.assertEqual(capture._capture(open_vault(start=self.root), url, True, kind="repo")[0].id, head.id)
+
+        # restore: a fresh clone re-fetches and pins commits the excerpts quote; warns on ones the remote lacks
+        rec = read_record(head.path)
+        rec.body = rec.body.replace("## Excerpts\n", f"## Excerpts\n### e1\n> y\nLocation: secret.txt L1 @ {dangling}\n\n"
+                                                     f"### e2\n> z\nLocation: gone.txt L1 @ {'f' * 40}\n\n")
+        rec.save()
+        import shutil
+        shutil.rmtree(clone)
+        _, change = capture._capture(open_vault(start=self.root), url, True, kind="repo")
+        self.assertEqual(change["status"], "restored clone")
+        self.assertEqual(subprocess.run(["git", "-C", str(clone), "rev-parse", "--verify", f"refs/kb/{dangling}"],
+                                        capture_output=True).returncode, 0)
+        self.assertEqual(len(change["warnings"]), 1)
+        self.assertIn("ffffffffffff", change["warnings"][0])

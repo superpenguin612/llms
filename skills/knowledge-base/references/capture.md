@@ -6,12 +6,14 @@
 kb capture https://example.com/post          # web page (raw HTML + headers, text via trafilatura)
 kb capture ./report.pdf --kind pdf           # local file (PDF, Office, image, subtitles, text)
 kb capture https://github.com/owner/repo     # repo: clone into the clones root, README + tree + commit
+kb capture https://github.com/owner/repo --ref dev   # repo at a branch, tag, pull/N/head or full sha: its own card
 kb capture https://youtu.be/…                # video: info + subtitles, no media
 ```
 
 - Every capture folder `originals/<id>/<date>/` gets a `capture.yaml` that kb writes: the capture time, tool, fetched URL, HTTP status, the main file, and every file's sha256, size and format. Web captures keep the server's `headers.txt`.
 - **Repos** also get a linked project entity (see model.md). Watching is opt-in: `kb capture <repo-url> --watch` adds a `git:` watch target, or add one later with `kb watch add <entity> git:<url>`.
-- **Repo clones** live outside vaults, in one standard place: `$KB_CLONES`, else `$XDG_DATA_HOME/kb/clones`, else `~/.local/share/kb/clones`. Each is at `<host>/<owner>/<repo>`. Cards record the portable `text: clone:github.com/owner/repo@<commit>`. On another machine, `kb capture <url>` restores a missing clone without making a new capture.
+- **Repo clones** live outside vaults, in one standard place: `$KB_CLONES`, else `$XDG_DATA_HOME/kb/clones`, else `~/.local/share/kb/clones`. Each is at `<host>/<owner>/<repo>`. Cards record the portable `text: clone:github.com/owner/repo@<commit>`. On another machine, `kb capture <url>` restores a missing clone without making a new capture, re-fetching the commits its excerpts quote (it warns about any the remote no longer serves).
+- **Pinned commits** are kept as `refs/kb/<sha>` in the clone, so gc never drops them even after a force-push or deletion upstream. `--ref` captures content that isn't on the default branch (another branch, a tag, a PR head, a commit only reachable by sha) as a separate card, id `<repo card id>-<ref>`, url `https://<host>/<owner>/<repo>/tree/<sha>`; nothing is checked out.
 - `kb capture` dedups by URL and content hash. If a match exists, it adds a new dated capture to the existing record instead of creating a new one.
 - It saves the original, writes `text/<id>.md` with anchors, and creates a stub card with tool metadata filled in.
 - **If capture fails** (paywall, login, JS-only page), keep what you got, set `depth: partial`, and explain in `original_note`. A dead page falls back to an existing Wayback snapshot. **Never submit pages to archive services.**

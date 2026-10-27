@@ -69,3 +69,16 @@ python3 -m unittest discover -s tests -t .
 ```
 
 The tests make no network calls. Tests that need an optional dependency skip when it's missing.
+
+## Vendored skills
+
+Third-party skills are pinned as git submodules in `vendor/` (updates only when the submodule is bumped, so changes can be reviewed first):
+
+| Submodule | What |
+|---|---|
+| `vendor/superpowers` | obra/superpowers: brainstorming, plans, TDD, systematic debugging, verification, worktrees, code review, writing skills |
+| `vendor/ponytail` | smallest-complete-change coding style, plus review/audit/debt skills |
+| `vendor/humanizer` | remove AI-writing patterns from prose |
+
+`git submodule update --init`, then `contrib/link-skills` links them (and `knowledge-base`) into `~/.codex/skills` and `~/.claude/skills`. In Claude Code, superpowers and ponytail are installed as plugins instead (`claude plugin install …`), because their plugins carry hooks.
+

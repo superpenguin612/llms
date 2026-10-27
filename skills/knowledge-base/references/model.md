@@ -21,10 +21,11 @@ The starter profiles define these default types:
 | `source` | external, immutable, extracted text, verbatim quotes, input, refresh | something someone else published |
 | `entity` | internal, synthesis, watch, cited | our running notes on a person, team, org, project, host or product |
 | `evidence` | internal, immutable, OCR text, input | something we captured: screenshot, log, pcap, scan, ticket |
-| `note` | internal, synthesis, cited | topics, playbooks, plans |
+| `topic` | internal, synthesis, cited | our synthesis on a subject: "what we know about X" |
+| `playbook` (competition profile) | internal, synthesis, cited | how we do something: procedures, checklists, commands |
 | `output` | internal, output, cited | findings, requirements, anything a downstream process consumes |
 
-The agent-vault profile instead has `design`, `project`, `session`, `note` and `source`. Any domain can rename, add or remove types.
+The agent-vault profile instead has `design`, `project`, `session`, `topic` and `source`. Any domain can rename, add or remove types.
 
 ## Layers
 

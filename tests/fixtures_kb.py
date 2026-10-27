@@ -18,7 +18,7 @@ def sample_vault(root, **kw):
             "captured": "2026-10-01T00:00:00Z",
             "last_checked": "2026-10-01"},
             "\n# Fox page\n\n## Summary\nFoxes.\n\n## Excerpts\n### e1\n> The quick brown fox jumps\nLocation: p. 1\n"),
-        "notes/foxes.md": ({"type": "note", "title": "Foxes", "description": "What we know about foxes.",
+        "topics/foxes.md": ({"type": "topic", "title": "Foxes", "description": "What we know about foxes.",
                             "sources": ["[[fox-page]]"]},
                            "\n# Foxes\n\nFoxes jump ([[fox-page#e1]]).\n\n## Detail\nMore.\n"),
     }

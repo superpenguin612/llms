@@ -37,8 +37,8 @@ class TestUtil(VaultTestCase):
 
 class TestRecords(VaultTestCase):
     def test_front_matter_and_sections(self):
-        fm, body = split_front_matter("---\ntype: note\ntitle: X\n---\n# X\n\n## A\none\n\n## B\ntwo\n")
-        self.assertEqual(fm["type"], "note")
+        fm, body = split_front_matter("---\ntype: topic\ntitle: X\n---\n# X\n\n## A\none\n\n## B\ntwo\n")
+        self.assertEqual(fm["type"], "topic")
         self.assertEqual(get_section(body, "A"), "one")
         body2 = append_to_section(body, "Timeline", "- 2026-10-27 — new")
         self.assertIn("## Timeline\n- 2026-10-27 — new", body2)
@@ -72,7 +72,7 @@ class TestVault(VaultTestCase):
         root = make_vault(self.tmp / "repo" / "knowledge-base", records={
             "sources/wk-overview.md": ({"type": "source", "title": "WK", "aliases": ["wk"],
                                         "url": "https://www.example.com/a/"}, "\n# WK\n"),
-            "inbox/x.md": ({"type": "note", "title": "ignored"}, ""),
+            "inbox/x.md": ({"type": "topic", "title": "ignored"}, ""),
         }, files={"Home.md": "# home\n", "evidence/c/shot.png": b"\x89PNG"})
         self.assertEqual(find_root(self.tmp / "repo"), root)
         v = open_vault(start=root / "sources")

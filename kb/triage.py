@@ -308,7 +308,7 @@ def scan(vault, context: str | None = None) -> dict:
     extra = (prof.get("secrets") or {}).get("extra_patterns") or []
     max_bytes = int(float((prof.get("caps") or {}).get("max_mb", 25)) * 20 * (1 << 20))
     ev_type = _pick_type(vault, "evidence", role="input", origin="internal")
-    note_type = _pick_type(vault, "note", role="synthesis", origin="internal")
+    note_type = _pick_type(vault, "topic", role="synthesis", origin="internal", tracked="none")
     src_type = _pick_type(vault, "source", origin="external")
     known = dict(capture._index(vault)["sha"])  # flat sha256 + every capture.yaml main file
     for r in vault.records:  # old nested format, until `kb migrate originals`
@@ -529,7 +529,7 @@ def _apply_evidence(vault, p, ocr_text: str) -> str:
 
 
 def _apply_note(vault, p) -> str:
-    t = vault.profile.type(p.get("type") or "note")
+    t = vault.profile.type(p.get("type") or _pick_type(vault, "topic", role="synthesis", origin="internal", tracked="none"))
     src = vault.root / p["file"]
     rid = p.get("id") or vault.new_id(slugify(src.stem))
     dest = vault.root / t.folder_for() / f"{rid}.md"

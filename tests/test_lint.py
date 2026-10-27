@@ -22,14 +22,14 @@ class TestLint(VaultTestCase):
 
     def test_errors(self):
         root = sample_vault(self.tmp / "v", records={
-            "notes/bad.md": ({"type": "note", "title": "Bad", "tier": "primary", "status": "wip", "id": "other",
+            "topics/bad.md": ({"type": "topic", "title": "Bad", "tier": "primary", "status": "wip", "id": "other",
                               "aliases": ["fox-page"]},
                              "\n[[missing]] [[fox-page#e9]] [[foxes#Nope]] [[foxes#Detail]]\n"),
-            "notes/nokind.md": ({"type": "widget", "title": "W"}, ""),
+            "topics/nokind.md": ({"type": "widget", "title": "W"}, ""),
             "sources/src3.md": ({"type": "source", "title": "S3", "tier": "primary", "originals_note": "n/a"}, ""),
             "sources/src2.md": ({"type": "source", "title": "S2", "kind": "pamphlet", "originals": []},
                                 "\n## Excerpts\n### e1\n> not in the text at all\n### e2\n> The quick brown, fox\n"),
-        }, files={"notes/broken.md": "---\ntype: [unclosed\n---\n", "text/src2.md": "The quick brown fox.\n", "sub/CLAUDE.md": "x",
+        }, files={"topics/broken.md": "---\ntype: [unclosed\n---\n", "text/src2.md": "The quick brown fox.\n", "sub/CLAUDE.md": "x",
                   "intake/2026-10-01-r1.tsv": "file\tsha256\tdisposition\ttarget\na.png\tab\t\t\nb.png\tcd\tevidence\tx\n",
                   "originals/fox-page/2026-10-01/page.html": b"tampered"})
         found = rules(root, fixity=True)
@@ -44,7 +44,7 @@ class TestLint(VaultTestCase):
     def test_warnings(self):
         old = time.time() - 10 * 86400
         root = sample_vault(self.tmp / "v", overrides={"caps": {"warn_mb": 0.000001}}, records={
-            "notes/lonely.md": ({"type": "note", "title": "L", "description": "x" * 201}, "\nno links\n"),
+            "topics/lonely.md": ({"type": "topic", "title": "L", "description": "x" * 201}, "\nno links\n"),
             "entities/team/t1.md": ({"type": "entity", "title": "T", "kind": "team", "watch": ["git:https://example.org/r"],
                                      "last_checked": "2020-01-01"}, "\n[[foxes]]\n"),
         }, files={"inbox/david/old.png": b"x"})
@@ -57,7 +57,7 @@ class TestLint(VaultTestCase):
         local = sample_vault(self.tmp / "private", overrides={"access": "local", "name": "priv"})
         (self.tmp / "registry.yaml").write_text(yaml.safe_dump({"vaults": {"priv": {"path": str(local)}}}))
         root = sample_vault(self.tmp / "v", overrides={"tags": ["plants"]}, records={
-            "notes/leak.md": ({"type": "note", "title": "Leak", "sources": ["[[fox-page]]"]},
+            "topics/leak.md": ({"type": "topic", "title": "Leak", "sources": ["[[fox-page]]"]},
                               f"\nsee {local}/notes/x.md\n")})
         found = rules(root)
         self.assertIn(("error", "tag"), found)

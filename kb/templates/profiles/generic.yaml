@@ -85,13 +85,12 @@ types:
       ocr_quality: [good, partial, none]
     required: [kind, context]
 
-  note:                   # our synthesis: topics, playbooks, plans
-    folder: notes
+  topic:                  # our synthesis on a subject: "what we know about X"
+    folder: topics
     origin: internal
     role: synthesis
     claims: cited
     keys:
-      note_kind: string
       sources: links
 
   output:                 # something meant to leave the KB (findings, requirements ...)

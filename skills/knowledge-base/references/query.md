@@ -3,7 +3,7 @@
 Querying is read-only unless the user asks you to file the answer as a note.
 
 1. **Route first.** The vault's `AGENTS.md` (`kb:agents` block) lists each type, its folder and its record count. Use it to decide where an answer would live.
-2. **Filter on metadata:** `kb find --type source --where tier=official --tag scoring`, or `kb find --origin internal --type note`.
+2. **Filter on metadata:** `kb find --type source --where tier=official --tag scoring`, or `kb find --origin internal --type topic`.
 3. **Search text:**
    - **Words:** `kb grep "persistence"`. A ranked full-text search over record bodies, excerpts, extracted text and registered repo docs. Narrow it with `--in excerpt|text|body|repo-doc`.
    - **Exact strings** with punctuation (registry paths, IPs, hashes, commands, config lines): `kb grep --exact 'server schannel = yes'`. Word search matches words in any order, so it isn't precise for these.

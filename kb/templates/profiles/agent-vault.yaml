@@ -48,12 +48,10 @@ types:
       commits: list
       project: link
 
-  note:
-    folder: notes
+  topic:                  # anything else worth writing down about my projects and setup
+    folder: topics
     origin: internal
     role: synthesis
-    keys:
-      note_kind: string
 
   source:                 # external material about agent tooling, cited by designs
     folder: sources

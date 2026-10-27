@@ -23,7 +23,7 @@ Work through `proposals.jsonl` in batches of about 20. For each proposal:
 - **`supports`:** the output records this evidence backs (e.g. a finding). If the evidence clearly shows a new issue with no output yet, create the output record first (slug id, no numbers), then link it.
 - **`sensitive`:** confirm the detector's flags (`secrets`, `pii`, `client-data`) and add any it missed. Don't redact here; downstream skills make redacted copies.
 - **Near-duplicates:** keep the most informative shot as the primary and set the others' route to `duplicate` (or keep them and link them with `same_as`).
-- **Write-ups from teammates** (route `note`): keep the file as it is. Afterwards, split its content into the right outputs, entities and notes, and cite it.
+- **Write-ups from teammates** (route `note`, filed as a `topic` or the profile's other synthesis type): keep the file as it is. Afterwards, split its content into the right outputs, entities and notes, and cite it.
 - **Published documents** (route `source`) and **URL lists** (route `capture`) are captured during apply; mine them afterwards ([capture.md](capture.md)).
 - **Anything unclear:** set `route: hold` with a `question`, and ask the user. Don't guess.
 

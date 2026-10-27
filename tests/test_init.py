@@ -27,7 +27,7 @@ class TestInit(VaultTestCase):
         self.assertIn("## Excerpts", tmpl)
         self.assertIn("<!-- kb:todo -->", (root / "README.md").read_text())
         self.assertIn("kb guide", (root / "AGENTS.md").read_text())
-        self.assertNotIn("tier:", (root / "templates/note.md").read_text())
+        self.assertNotIn("tier:", (root / "templates/topic.md").read_text())
         with self.assertRaises(KBError):
             init(root, "generic")
 

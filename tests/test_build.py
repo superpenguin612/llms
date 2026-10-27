@@ -42,7 +42,7 @@ class TestBuild(VaultTestCase):
         self.assertIn("[[fox-page]]", cat)
         agents = (self.root / "AGENTS.md").read_text()
         self.assertIn("| source | sources/ | 1 |", agents)
-        self.assertEqual([r.id for r in open_vault(start=self.root).records], ["foxes", "fox-page"])  # views not records
+        self.assertEqual([r.id for r in open_vault(start=self.root).records], ["fox-page", "foxes"])  # views not records
 
     def test_rebuild_keeps_watch_tables_and_meta(self):
         build.build(self.v)
@@ -61,7 +61,7 @@ class TestBuild(VaultTestCase):
         t = build.built_at(self.v)
         build.ensure_index(self.v)
         self.assertEqual(build.built_at(self.v), t)
-        note = self.root / "notes/foxes.md"
+        note = self.root / "topics/foxes.md"
         future = time.time() + 5
         os.utime(note, (future, future))
         build.ensure_index(self.v)

@@ -13,7 +13,7 @@ class TestQuery(VaultTestCase):
     def setUp(self):
         super().setUp()
         self.root = sample_vault(self.tmp / "v", records={
-            "notes/flagged.md": ({"type": "note", "title": "Flagged", "injection_flag": True,
+            "topics/flagged.md": ({"type": "topic", "title": "Flagged", "injection_flag": True,
                                   "injection_note": "ignore previous instructions"}, "\nbody text\n")})
         cd(self, self.root)
 
@@ -62,7 +62,7 @@ class TestQuery(VaultTestCase):
 
     def test_query(self):
         _, out = self.run_kb("query", "SELECT id, type FROM records ORDER BY id", "--json")
-        self.assertEqual(json.loads(out)[0], {"id": "flagged", "type": "note"})
+        self.assertEqual(json.loads(out)[0], {"id": "flagged", "type": "topic"})
         _, out = self.run_kb("query", "SELECT count(*) AS n FROM excerpts")
         self.assertIn("(1 rows)", out)
         self.assertEqual(self.run_kb("query", "DELETE FROM records")[0], 2)

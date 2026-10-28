@@ -333,13 +333,18 @@ def _chat(path):
             out.append(f"[attachment {f.name}: {att.get('fileName')}]")
             if not f.is_file():
                 out.append("(file missing from the export)")
-            elif detect(f) == "image" and ocr.available():
+                continue
+            try:
+                k = detect(f)
+            except KBError:  # binary without a known extension: kept as an original, not extracted
+                continue
+            if k == "image" and ocr.available():
                 text, _ = ocr.ocr_image(f)
                 ocred = True
                 out.append(text.strip() or "(no text found by OCR)")
-            elif f.suffix.lower() in EXT["text"] | EXT["code"]:
+            elif k in ("text", "code"):
                 out.append(_read_text(f).strip())
-            elif detect(f) == "archive":
+            elif k == "archive":
                 out.append(_archive(f)[0])
     return "\n\n".join(out), {"extracted_with": "kb chat (DiscordChatExporter json)", "anchors": "messages",
                                "text_quality": "mixed" if ocred else "good"}

@@ -746,7 +746,7 @@ def _update(a, rec):
                     and excerpt_in_text(e.text, a.text, nt) == "missing"]
             change["gone"] = gone
             body = mark_gone(body, gone, d)
-            line = f"- {d}: recaptured; text changed (+{change['added']}/−{change['removed']} lines)"
+            line = f"- {d}: {getattr(a, 'verb', 'recaptured')}; text changed (+{change['added']}/−{change['removed']} lines)"
             line += (f"; gone: {', '.join(gone)}" if gone else "") + (f"; previous text: {a.vault.rel(hist)}" if hist else "")
             body = add_change(body, line)
         elif a.flags:

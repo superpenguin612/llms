@@ -1,4 +1,5 @@
-"""kb migrate originals: convert records from the nested `originals:` list to flat Properties keys
+"""kb migrate text: re-extract records' text from their current originals (after an extractor fix).
+kb migrate originals: convert records from the nested `originals:` list to flat Properties keys
 (`original`, `sha256`, `captured`) plus a capture.yaml manifest per capture folder, and repo clone
 paths to the portable `clone:<host>/<owner>/<repo>@<commit>` form. Idempotent."""
 
@@ -6,7 +7,9 @@ import datetime as dt
 import re
 from pathlib import Path
 
-from kb import capture, vault as vaultmod
+from types import SimpleNamespace
+
+from kb import capture, extract, inject, vault as vaultmod
 from kb.util import KBError, append_log, emit, sha256_file
 
 _AUX = ("headers.txt", "tree.txt", "commit.txt")
@@ -152,6 +155,34 @@ def cmd_originals(args) -> int:
     return 1 if rep["refused"] else 0
 
 
+def reextract(vault, ids, kind=None) -> list:
+    """Re-run extraction on each record's current original; the old text moves to text/history and
+    excerpts no longer in the text are marked gone, exactly as a recapture would. Originals are untouched."""
+    out = []
+    for rid in ids:
+        rec = vault.get(rid)
+        if rec is None or not rec.fm.get("original"):
+            raise KBError(f"{rid}: no record with an `original` to re-extract")
+        path = vault.root / str(rec.fm["original"])
+        k = kind or ("chat" if rec.fm.get("kind") == "chat" else None)
+        text, meta = extract.extract(path, k)
+        a = SimpleNamespace(vault=vault, rid=rec.id, td=vault.typedef(rec), got=SimpleNamespace(dead=False), text=text,
+                            meta=meta, title=rec.title, kind=rec.fm.get("kind"), src=None, flags=inject.scan(text),
+                            originals={k2: rec.fm[k2] for k2 in ("original", "sha256", "captured")},
+                            capture=vault.rel(path.parent), warnings=[], set={}, verb="re-extracted")
+        out.append(capture._update(a, rec)[1])
+        append_log(vault.root, "migrate", rec.id, f"text re-extracted ({out[-1]['status']})")
+    return out
+
+
+def cmd_text(args) -> int:
+    v = vaultmod.open_from_args(args)
+    rep = reextract(v, args.ids, args.kind)
+    emit(args, rep, [f"{c['id']}: {c['status']} (+{c['added']}/-{c['removed']} lines"
+                     + (f"; gone: {', '.join(c['gone'])}" if c["gone"] else "") + ")" for c in rep])
+    return 0
+
+
 def register(subparsers, common):
     p = subparsers.add_parser("migrate", parents=[common], help="upgrade a vault written by an older kb")
     sub = p.add_subparsers(dest="migrate_cmd", metavar="SUBCOMMAND", required=True)
@@ -159,3 +190,7 @@ def register(subparsers, common):
                        help="nested originals: -> flat original/sha256/captured + capture.yaml; portable clone paths")
     o.add_argument("--dry-run", action="store_true", help="report what would change, write nothing")
     o.set_defaults(func=cmd_originals)
+    x = sub.add_parser("text", parents=[common], help="re-extract text from current originals (after an extractor fix)")
+    x.add_argument("ids", nargs="+")
+    x.add_argument("--kind", choices=extract.KINDS, help="force an extractor (default: by file type; chat for chat records)")
+    x.set_defaults(func=cmd_text)

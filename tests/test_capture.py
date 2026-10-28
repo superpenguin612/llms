@@ -284,7 +284,9 @@ class TestCaptureFile(CaptureCase):
                   "channel": {"id": "5", "category": "Boxes", "name": "cf-web-chat"},
                   "messages": [
                       {"id": "100", "type": "Default", "timestamp": "2025-11-15T14:02:11.5+00:00",
-                       "content": "web is down again", "author": author, "attachments": [], "embeds": []},
+                       "content": "web is down again", "author": author, "attachments": [], "embeds": [
+                           {"title": "Wazuh Alert - Rule 5501", "url": None, "description": "PAM: Login session opened.",
+                            "fields": [{"name": "Agent", "value": "cf-web"}]}]},
                       {"id": "101", "type": "Reply", "timestamp": "2025-11-15T14:03:00+00:00", "content": "",
                        "author": author, "reference": {"messageId": "100"}, "embeds": [],
                        "attachments": [
@@ -306,6 +308,7 @@ class TestCaptureFile(CaptureCase):
         self.assertEqual((m["main"], rec.fm["kind"], again.id), ("general.json", "chat", rec.id))
         text = (self.root / "text" / "cf-web-chat.md").read_text()
         for s in ("[msg 100 2025-11-15 14:02 UTC] David (penguin)", "web is down again",
+                  "[embed] Wazuh Alert - Rule 5501\nPAM: Login session opened.\nAgent: cf-web",
                   "[msg 101 2025-11-15 14:03 UTC] David (penguin) (reply to msg 100)",
                   "[attachment image-6b61.png: image.png]", "SCOREBOARD web 0/40",
                   "[attachment notes-1a2b.txt: notes.txt]", "wazuh agent ids 001-006", "[attachment 9-7974: 9]", "(OCR failed: tesseract failed on broken.png",

@@ -1,7 +1,8 @@
 import yaml
 
 from kb.lint import Linter
-from kb.migrate import migrate_originals
+from kb import capture
+from kb.migrate import migrate_originals, reextract
 from kb.records import read_record
 from kb.util import sha256_bytes
 from kb.vault import open_vault
@@ -98,3 +99,21 @@ class TestMigrateOriginals(VaultTestCase):
         self.assertNotIn("originals", fm)
         self.assertEqual(str(fm["updated"]), "2026-10-25")
         self.assertIn("\nupdated: 2026-10-25\n", (root / "evidence/lab/shot.md").read_text())
+
+
+class TestMigrateText(VaultTestCase):
+    def test_reextract_rewrites_text_keeps_original_and_history(self):
+        root = make_vault(self.tmp / "v")
+        v = open_vault(start=root)
+        p = self.tmp / "plan.txt"
+        p.write_text("Plain release plan text for the example project.\n")
+        rec = capture.capture_file(v, p)
+        tpath = root / "text" / f"{rec.id}.md"
+        tpath.write_text(tpath.read_text().replace("Plain release plan", "Garbled"))  # a wrong extraction
+        orig = (root / rec.fm["original"]).read_bytes()
+        rep = reextract(open_vault(start=root), [rec.id])
+        self.assertEqual(rep[0]["status"], "changed")
+        self.assertIn("Plain release plan", tpath.read_text())
+        self.assertEqual((root / rec.fm["original"]).read_bytes(), orig)
+        self.assertEqual(len(list((root / "text" / "history" / rec.id).iterdir())), 1)
+        self.assertIn("re-extracted", read_record(rec.path).body)

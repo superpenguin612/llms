@@ -326,8 +326,12 @@ def _chat(path):
                    + (f" (reply to msg {ref})" if ref else ""))
         if (m.get("content") or "").strip():
             out.append(m["content"].strip())
-        out += [f"[embed] {e.get('title') or ''} {e.get('url') or ''}".rstrip() for e in m.get("embeds") or []
-                if e.get("url") and e["url"] not in (m.get("content") or "")]
+        for e in m.get("embeds") or []:  # bot posts (alerts) carry everything in embeds
+            body = [e["description"].strip()] if (e.get("description") or "").strip() else []
+            body += [f"{f.get('name')}: {f.get('value')}" for f in e.get("fields") or []]
+            head = " ".join(x for x in (e.get("title"), e.get("url")) if x)
+            if (head or body) and not (e.get("url") and e["url"] in (m.get("content") or "") and not body):
+                out.append("\n".join([f"[embed] {head}".rstrip(), *body]))
         for att in m.get("attachments") or []:
             f = path.parent / Path(att["url"]).name
             out.append(f"[attachment {f.name}: {att.get('fileName')}]")

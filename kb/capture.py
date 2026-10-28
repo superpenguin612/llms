@@ -582,6 +582,13 @@ def _capture(vault, src, is_url, id=None, type="source", kind=None, obtained_fro
                 raise KBError(f"{p.name} is {p.stat().st_size / MB:.1f} MB, over caps.max_mb ({max_b // MB}); "
                               f"raise caps.max_mb in kb.yaml or keep it outside the vault")
             shutil.copy2(p, stage / p.name)
+            if kind == "chat":  # the export's attachments are part of the original, kept next to it
+                for rel in extract.chat_attachments(p):
+                    a = p.parent / rel
+                    if a.is_file() and not (stage / a.name).exists():
+                        if a.stat().st_size > max_b:
+                            raise KBError(f"attachment {a.name} is over caps.max_mb ({max_b // MB})")
+                        shutil.copy2(a, stage / a.name)
             got = SimpleNamespace(main=p.name, fetched_url=None, http_status=None, via="file", final_url=None,
                                   dead=False, text=None, meta=None, title=None, kind=None)
         if existing is None and got.final_url:

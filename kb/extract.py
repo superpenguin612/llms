@@ -31,7 +31,7 @@ EXT = {
     "text": {".txt", ".md", ".markdown", ".rst", ".log", ".csv", ".tsv"},
     "archive": {".zip", ".tar", ".tar.gz", ".tgz", ".tar.zst", ".zst"},
 }
-KINDS = tuple(EXT)
+KINDS = (*EXT, "chat")  # chat: a DiscordChatExporter JSON export, picked only by --kind chat
 # Source kinds (profile `kind` values) that imply an extractor regardless of extension.
 ALIASES = {"webpage": "html", "blog-post": "html", "slides": "office", "office-doc": "office",
            "spreadsheet": "office", "video": "subtitles", "podcast": "subtitles"}
@@ -289,6 +289,60 @@ def parse_subtitles(raw: str) -> list[tuple[float, str]]:
                 out.append((start, line))
                 last = line
     return out
+
+
+def _chat_export(path):
+    """The parsed DiscordChatExporter JSON export, or None when the file isn't one."""
+    try:
+        d = json.loads(_read_text(path))
+    except ValueError:
+        return None
+    return d if isinstance(d, dict) and {"guild", "channel", "messages"} <= d.keys() else None
+
+
+def chat_attachments(path) -> list[str]:
+    """Paths (relative to the export) of every message attachment in a chat export; avatars, emoji and
+    embed thumbnails are not attachments."""
+    d = _chat_export(path) or {"messages": []}
+    return list(dict.fromkeys(a["url"] for m in d["messages"] for a in m.get("attachments") or []))
+
+
+def _chat(path):
+    """Transcript of a DiscordChatExporter JSON export, one block per message with its link; each attachment
+    (copied next to the export by capture) is inlined: OCR for images, text for text files, a listing for
+    archives. Excerpts quote these lines, so one attachment is citable as one excerpt."""
+    d = _chat_export(path)
+    if d is None:
+        return _text(path)
+    g, c = d["guild"], d["channel"]
+    out = [f"Discord: {g.get('name')} / {c.get('category')} / {c.get('name')} ({len(d['messages'])} messages)\n"
+           f"Message links: https://discord.com/channels/{g['id']}/{c['id']}/<msg id>"]
+    ocred = False
+    for m in d["messages"]:
+        a = m.get("author") or {}
+        who = f"{a['nickname']} ({a['name']})" if a.get("nickname") and a["nickname"] != a.get("name") else a.get("name")
+        ref = (m.get("reference") or {}).get("messageId")
+        out.append(f"[msg {m['id']} {m['timestamp'][:16].replace('T', ' ')} UTC] {who}"
+                   + (f" (reply to msg {ref})" if ref else ""))
+        if (m.get("content") or "").strip():
+            out.append(m["content"].strip())
+        out += [f"[embed] {e.get('title') or ''} {e.get('url') or ''}".rstrip() for e in m.get("embeds") or []
+                if e.get("url") and e["url"] not in (m.get("content") or "")]
+        for att in m.get("attachments") or []:
+            f = path.parent / Path(att["url"]).name
+            out.append(f"[attachment {f.name}: {att.get('fileName')}]")
+            if not f.is_file():
+                out.append("(file missing from the export)")
+            elif detect(f) == "image" and ocr.available():
+                text, _ = ocr.ocr_image(f)
+                ocred = True
+                out.append(text.strip() or "(no text found by OCR)")
+            elif f.suffix.lower() in EXT["text"] | EXT["code"]:
+                out.append(_read_text(f).strip())
+            elif detect(f) == "archive":
+                out.append(_archive(f)[0])
+    return "\n\n".join(out), {"extracted_with": "kb chat (DiscordChatExporter json)", "anchors": "messages",
+                               "text_quality": "mixed" if ocred else "good"}
 
 
 def _subtitles(path):

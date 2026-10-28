@@ -260,7 +260,8 @@ def base_view(vault, td) -> dict:
                 v["image"] = "note.file"
             views.append(v)
     return {"filters": {"and": [f'note.type == "{td.name}"', f"file.path.startsWith({_ROOT})",
-                                {"not": [_in("templates"), _in("views")]}]},
+                                {"not": [_in("templates"), _in("views")]},
+                                'note.status != "superseded"']},
             "views": views}
 
 

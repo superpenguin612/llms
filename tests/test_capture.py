@@ -277,6 +277,7 @@ class TestCaptureFile(CaptureCase):
         (media / "avatar-c714.png").write_bytes(b"\x89PNG avatar")  # referenced only as an avatar: not bundled
         (media / "notes-1a2b.txt").write_text("wazuh agent ids 001-006\n")
         (media / "9-7974").write_bytes(b"\x00\xff\x00 binary, no extension")
+        (media / "broken-0c0c.png").write_bytes(b"\x89PNG truncated")
         author = {"id": "1", "name": "penguin", "nickname": "David", "isBot": False,
                   "avatarUrl": "general.json_Files/avatar-c714.png"}
         export = {"guild": {"id": "9", "name": "Team"},
@@ -289,20 +290,25 @@ class TestCaptureFile(CaptureCase):
                        "attachments": [
                            {"url": "general.json_Files/image-6b61.png", "fileName": "image.png", "fileSizeBytes": 14},
                            {"url": "general.json_Files/notes-1a2b.txt", "fileName": "notes.txt", "fileSizeBytes": 24},
-                           {"url": "general.json_Files/9-7974", "fileName": "9", "fileSizeBytes": 23}]}]}
+                           {"url": "general.json_Files/9-7974", "fileName": "9", "fileSizeBytes": 23},
+                           {"url": "general.json_Files/broken-0c0c.png", "fileName": "broken.png", "fileSizeBytes": 15}]}]}
         p = self.tmp / "general.json"
         p.write_text(json.dumps(export))
-        with mock.patch("kb.ocr.ocr_image", return_value=("SCOREBOARD web 0/40", [])):
+        def fake_ocr(path):
+            if "broken" in str(path):
+                raise KBError("tesseract failed on broken.png: Error during processing.")
+            return "SCOREBOARD web 0/40", []
+        with mock.patch("kb.ocr.ocr_image", side_effect=fake_ocr), mock.patch("kb.ocr.available", return_value=True):
             rec = capture.capture_file(self.v, p, kind="chat", id="cf-web-chat")
             again = capture.capture_file(self.v, p, kind="chat")
         m = yaml.safe_load((self.root / rec.fm["original"]).parent.joinpath("capture.yaml").read_text())
-        self.assertEqual(sorted(f["name"] for f in m["files"]), ["9-7974", "general.json", "image-6b61.png", "notes-1a2b.txt"])
+        self.assertEqual(sorted(f["name"] for f in m["files"]), ["9-7974", "broken-0c0c.png", "general.json", "image-6b61.png", "notes-1a2b.txt"])
         self.assertEqual((m["main"], rec.fm["kind"], again.id), ("general.json", "chat", rec.id))
         text = (self.root / "text" / "cf-web-chat.md").read_text()
         for s in ("[msg 100 2025-11-15 14:02 UTC] David (penguin)", "web is down again",
                   "[msg 101 2025-11-15 14:03 UTC] David (penguin) (reply to msg 100)",
                   "[attachment image-6b61.png: image.png]", "SCOREBOARD web 0/40",
-                  "[attachment notes-1a2b.txt: notes.txt]", "wazuh agent ids 001-006", "[attachment 9-7974: 9]",
+                  "[attachment notes-1a2b.txt: notes.txt]", "wazuh agent ids 001-006", "[attachment 9-7974: 9]", "(OCR failed: tesseract failed on broken.png",
                   "https://discord.com/channels/9/5/<msg id>"):
             self.assertIn(s, text)
 

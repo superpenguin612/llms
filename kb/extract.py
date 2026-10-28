@@ -339,7 +339,10 @@ def _chat(path):
             except KBError:  # binary without a known extension: kept as an original, not extracted
                 continue
             if k == "image" and ocr.available():
-                text, _ = ocr.ocr_image(f)
+                try:
+                    text, _ = ocr.ocr_image(f)
+                except KBError as e:  # one unreadable image must not lose the whole channel
+                    text = f"(OCR failed: {e})"
                 ocred = True
                 out.append(text.strip() or "(no text found by OCR)")
             elif k in ("text", "code"):

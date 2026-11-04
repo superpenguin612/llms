@@ -1,0 +1,45 @@
+#!/bin/sh
+# Global git hooks (core.hooksPath): enforce agent-vault global/repos.yaml, then run the repo's own hook.
+# Every hook name here is a symlink to this file.
+set -eu
+hook=$(basename "$0")
+policy="$HOME/src/agents/agent-vault/global/repos.yaml"  # policy lives in agent-vault
+git_dir=$(git rev-parse --git-common-dir 2>/dev/null) || exit 0  # e.g. during git init
+own_hook="$git_dir/hooks/$hook"
+
+die() { echo "repo policy ($slug: $mode): $*" >&2; exit 1; }
+
+# owner/repo from a remote URL; its mode from repos.yaml, else `default`.
+set_mode() {
+  case $1 in ""|/*|./*|../*|file://*) slug=$1 mode=main; return ;; esac  # local or none: not policed
+  slug=$(printf '%s\n' "$1" | sed -E 's#^(https?://[^/]+/|ssh://([^@/]+@)?[^/]+/|[^@/]+@[^:]+:)##; s#\.git$##; s#/$##')
+  mode=$(awk -v k="$slug" '{sub(/[ \t]*#.*/, "")} $1 == k":" {print $2; exit}' "$policy")
+  [ -n "$mode" ] || mode=$(awk '$1 == "default:" {print $2; exit}' "$policy")
+  case $mode in no-push|pr|main) ;; *) die "unknown mode in $policy" ;; esac
+}
+
+case $hook in
+pre-commit)
+  set_mode "$(git remote get-url origin 2>/dev/null || true)"
+  case $(git symbolic-ref --short -q HEAD || true) in
+  main|master) [ "$mode" != pr ] || die "don't commit to main; create a branch" ;;
+  esac
+  ;;
+pre-push)
+  # $1 is the remote name (or a URL when pushing to one directly).
+  set_mode "$(git remote get-url "$1" 2>/dev/null || echo "$2")"
+  [ "$mode" != no-push ] || die "pushing is not allowed"
+  refs=$(cat)
+  if [ "$mode" = pr ]; then
+    for ref in $(printf '%s\n' "$refs" | awk '{print $3}'); do
+      case $ref in refs/heads/main|refs/heads/master) die "don't push to main; push a branch and open a PR" ;; esac
+    done
+  fi
+  [ -x "$own_hook" ] || exit 0
+  printf '%s\n' "$refs" | "$own_hook" "$@"
+  exit
+  ;;
+esac
+
+[ -x "$own_hook" ] || exit 0
+exec "$own_hook" "$@"

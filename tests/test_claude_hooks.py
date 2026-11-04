@@ -166,8 +166,15 @@ class TestStatusLine(HookCase):
     def test_cache_nearly_cold_and_cold(self):
         now = time.time()
         pc = {"warm": True, "expires_at": now + 200, "recache_tokens_if_cold": 312000}
-        self.assertIn("cache 3m (cold: 312k)", self.line(prompt_cache=pc))
-        self.assertIn("cache cold: 312k", self.line(prompt_cache=dict(pc, expires_at=now - 5)))
+        cw = {"current_usage": {"input_tokens": 5, "cache_read_input_tokens": 312000}}
+        self.assertIn("cache 3m (cold: 312k)", self.line(context_window=cw, prompt_cache=pc))
+        self.assertIn("cache cold: 312k", self.line(context_window=cw, prompt_cache=dict(pc, expires_at=now - 5)))
+
+    def test_no_cache_segment_after_compaction(self):
+        pc = {"warm": False, "expires_at": time.time() - 5, "recache_tokens_if_cold": 312000, "hit_ratio": 0.9}
+        out = self.line(context_window={"current_usage": None}, prompt_cache=pc)
+        self.assertNotIn("cache", out)
+        self.assertIn("hit 90%", out)
 
     def test_missing_fields(self):
         self.assertEqual(self.line(), "Opus 5.5")

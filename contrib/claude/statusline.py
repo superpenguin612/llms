@@ -101,7 +101,8 @@ def cache_segments(data, now):
     pc = obj(data, "prompt_cache")
     out = []
     exp, cold = num(pc.get("expires_at")), num(pc.get("recache_tokens_if_cold"))
-    if exp is not None:
+    # current_usage is null right after a compaction; prompt_cache still describes the old prefix then
+    if exp is not None and obj(obj(data, "context_window"), "current_usage"):
         left = int(exp - now)
         if left <= 0 or pc.get("warm") is False:
             out.append(fg(RED, "cache cold" + (": %s" % human(cold) if cold else "")))

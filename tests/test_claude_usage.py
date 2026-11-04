@@ -168,10 +168,34 @@ class TestClaudeUsage(unittest.TestCase):
         with mock.patch("sys.stdout"):
             cu.main(["report", "--out", str(out)])
         text = next(out.glob("*-W*.md")).read_text()
-        self.assertIn("| m1 | 1 | 0 | 0 | 1 | 0 | 100 | 10 | 20 | 0 | $0.10 |", text)
-        self.assertIn("| m2 | 3 | 2 | 1 | 0 | 0 | 900 | 90 | 80 | 100 | $0.90 |", text)
+        self.assertIn("| m1 | 1 | 0 | 0 | 1 | 0 | 0 | 100 | 10 | 20 | 0 | $0.10 |", text)
+        self.assertIn("| m2 | 3 | 2 | 1 | 0 | 0 | 0 | 900 | 90 | 80 | 100 | $0.90 |", text)
         self.assertIn("| fallback-task | implementation | merged | 3 | yes | yes | $0.60 | — |", text)
         self.assertIn("| timeout-task | slow | abandoned | 1 | no | no | $0.40 | — |", text)
+
+    def test_report_delegated_takeovers(self):
+        started = dt.datetime.now(dt.timezone.utc).astimezone().isoformat(timespec="seconds")
+        write(self.home / ".local/share/delegate/runs.jsonl", [
+            delegate_run("retry-task", started, attempts=[
+                attempt("m1", "timeout", input=100, output=10, cost=0.1),
+                attempt("m2", "ok", input=200, output=20, cost=0.2),
+            ]),
+            # Opus took this one over: counted against the last attempt's model.
+            delegate_run("takeover-task", started, outcome="opus", attempts=[
+                attempt("m1", "failed", input=300, output=30, cost=0.3),
+                attempt("m2", "ok", input=400, output=40, cost=0.4),
+            ]),
+            delegate_run("plain-task", started, attempts=[
+                attempt("m2", "ok", input=500, output=50, cost=0.5),
+            ]),
+        ])
+        out = self.home / "out"
+        with mock.patch("sys.stdout"):
+            cu.main(["report", "--out", str(out)])
+        text = next(out.glob("*-W*.md")).read_text()
+        self.assertIn("| m1 | 2 | 0 | 1 | 0 | 1 | 0 | 400 | 40 | 0 | 0 | $0.40 |", text)
+        self.assertIn("| m2 | 3 | 3 | 0 | 0 | 0 | 1 | 1.1k | 110 | 0 | 0 | $1.10 |", text)
+        self.assertIn("Takeovers: 1 of 3 runs", text)
 
     def test_report_delegated_links_session(self):
         now = dt.datetime.now(dt.timezone.utc)

@@ -294,7 +294,8 @@ def delegated(args, runs, sessions):
             if key[0] == "codex":
                 labels.setdefault(key, f"codex: {key[1][:8]}")
 
-    by_model = collections.defaultdict(lambda: dict(attempts=[], outcomes=collections.Counter(), tokens=collections.Counter()))
+    by_model = collections.defaultdict(lambda: dict(attempts=[], outcomes=collections.Counter(),
+                                                    tokens=collections.Counter(), takeovers=0))
     for r in runs:
         for a in r.get("attempts") or []:
             model = a.get("model") or "?"
@@ -303,9 +304,13 @@ def delegated(args, runs, sessions):
             row["outcomes"][a.get("outcome") or "?"] += 1
             for k in TOKEN_KEYS:
                 row["tokens"][k] += a.get(k) or 0
+    takeovers = [r for r in runs if r.get("outcome") == "opus"]
+    for r in takeovers:  # a takeover counts against the model of the run's last attempt
+        if r.get("attempts"):
+            by_model[r["attempts"][-1].get("model") or "?"]["takeovers"] += 1
     out += ["### By model", ""]
-    out += table(["model", "attempts", *OUTCOMES, "input", "output", "cache read", "cache write", "Go $"],
-                 [(m, len(x["attempts"]), *(str(x["outcomes"][o]) for o in OUTCOMES),
+    out += table(["model", "attempts", *OUTCOMES, "takeovers", "input", "output", "cache read", "cache write", "Go $"],
+                 [(m, len(x["attempts"]), *(str(x["outcomes"][o]) for o in OUTCOMES), str(x["takeovers"]),
                    *(tok(x["tokens"][k]) for k in TOKEN_KEYS), go_money(go_cost(x["attempts"])))
                   for m, x in sorted(by_model.items())])
 
@@ -320,6 +325,7 @@ def delegated(args, runs, sessions):
                           "yes" if len(models) > 1 else "no", "yes" if retried else "no",
                           go_money(go_cost(attempts)), ", ".join(linked) or "—"))
     out += table(["task", "chain", "outcome", "attempts", "fallback", "retried", "Go $", "sessions"], task_rows)
+    out += ["", f"Takeovers: {len(takeovers)} of {len(runs)} runs"]
 
     by_link = collections.defaultdict(list)
     for r in runs:

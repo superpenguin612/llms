@@ -1,20 +1,15 @@
 #!/bin/sh
-# Link kb's skill and the vendored skills (git submodules in vendor/) into each agent's skills folder.
-# Claude Code gets ponytail and superpowers as plugins instead (their plugins carry hooks), so only
-# knowledge-base, humanizer and grilling are linked there. Re-run after `git submodule update`.
+# Link kb's skills and the vendored skills (git submodules in vendor/) into each agent's skills folder.
+# Claude Code gets ponytail as a plugin instead (the plugin carries hooks), so it's linked for Codex
+# only. Re-run after `git submodule update`.
 set -eu
 here=$(cd "$(dirname "$0")/.." && pwd)
 link() { mkdir -p "$1"; ln -sfn "$2" "$1/$(basename "$2")"; }
+matt="$here/vendor/mattpocock-skills/skills"
+skills="$here/skills/knowledge-base $here/skills/handoff $here/skills/design-walkthrough
+  $here/vendor/humanizer $matt/productivity/grilling $matt/engineering/tdd $matt/engineering/diagnosing-bugs"
 
-codex="$HOME/.codex/skills"
-link "$codex" "$here/skills/knowledge-base"
-link "$codex" "$here/vendor/humanizer"            # the repo root is the skill
-link "$codex" "$here/vendor/mattpocock-skills/skills/productivity/grilling"
-for s in "$here"/vendor/superpowers/skills/* "$here"/vendor/ponytail/skills/*; do
-  [ -f "$s/SKILL.md" ] && link "$codex" "$s"
+for s in $skills; do link "$HOME/.codex/skills" "$s"; link "$HOME/.claude/skills" "$s"; done
+for s in "$here"/vendor/ponytail/skills/*; do
+  [ -f "$s/SKILL.md" ] && link "$HOME/.codex/skills" "$s"
 done
-
-claude="$HOME/.claude/skills"
-link "$claude" "$here/skills/knowledge-base"
-link "$claude" "$here/vendor/humanizer"
-link "$claude" "$here/vendor/mattpocock-skills/skills/productivity/grilling"

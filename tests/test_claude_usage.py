@@ -36,6 +36,27 @@ def cost(total, sid="s1"):
             "modelUsage": {"claude-test": {"costUSD": total}}}
 
 
+def bash_turn(mid, ts, command):
+    """One assistant line with a Bash tool call and no usage (the command itself is what matters)."""
+    return [{"type": "assistant", "timestamp": ts,
+             "message": {"id": mid, "model": "claude-test",
+                         "content": [{"type": "tool_use", "id": f"{mid}-t", "name": "Bash",
+                                      "input": {"command": command}}]}}]
+
+
+def attempt(model, outcome, input=0, output=0, cache_read=0, cache_write=0, cost=0.0, retry=False):
+    a = {"model": model, "outcome": outcome, "exit": 0, "input": input, "output": output,
+         "cache_read": cache_read, "cache_write": cache_write, "cost": cost, "seconds": 1, "session": None}
+    if retry:
+        a["retry"] = True
+    return a
+
+
+def delegate_run(task, started, outcome="merged", chain="implementation", attempts=()):
+    return {"task": task, "mode": "worktree", "chain": chain, "started": started, "status": "ok",
+            "outcome": outcome, "repo": "/tmp/demo", "attempts": list(attempts)}
+
+
 def write(path, records):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("".join(json.dumps(r) + "\n" for r in records))
@@ -123,6 +144,67 @@ class TestClaudeUsage(unittest.TestCase):
         self.assertIn("Opus subagents: 1.", text)
         self.assertIn("| general-purpose | Do a part | 1 |", text)
         self.assertIn("| src/demo | 1 | 2.0M | 1.0M | 0.1M |", text)
+
+    def test_delegate_tasks_from_commands(self):
+        cmd = ("cd x && delegate run --repo . --task one --brief b.md && "
+               "python3 tool/delegate run --task two --brief b.md && "
+               "/usr/local/bin/delegate retry three --feedback f.md")
+        self.assertEqual(cu.delegate_tasks(cmd), {"one", "two", "three"})
+        self.assertEqual(cu.delegate_tasks("delegate run --help"), set())
+
+    def test_report_delegated_by_model_and_flags(self):
+        started = dt.datetime.now(dt.timezone.utc).astimezone().isoformat(timespec="seconds")
+        write(self.home / ".local/share/delegate/runs.jsonl", [
+            delegate_run("fallback-task", started, attempts=[
+                attempt("m1", "api_error", input=100, output=10, cache_read=20, cost=0.1),
+                attempt("m2", "ok", input=200, output=20, cache_read=30, cache_write=40, cost=0.2),
+                attempt("m2", "ok", input=300, output=30, cache_read=50, cache_write=60, cost=0.3, retry=True),
+            ]),
+            delegate_run("timeout-task", started, outcome="abandoned", chain="slow", attempts=[
+                attempt("m2", "timeout", input=400, output=40, cost=0.4),
+            ]),
+        ])
+        out = self.home / "out"
+        with mock.patch("sys.stdout"):
+            cu.main(["report", "--out", str(out)])
+        text = next(out.glob("*-W*.md")).read_text()
+        self.assertIn("| m1 | 1 | 0 | 0 | 1 | 0 | 100 | 10 | 20 | 0 | $0.10 |", text)
+        self.assertIn("| m2 | 3 | 2 | 1 | 0 | 0 | 900 | 90 | 80 | 100 | $0.90 |", text)
+        self.assertIn("| fallback-task | implementation | merged | 3 | yes | yes | $0.60 | — |", text)
+        self.assertIn("| timeout-task | slow | abandoned | 1 | no | no | $0.40 | — |", text)
+
+    def test_report_delegated_links_session(self):
+        now = dt.datetime.now(dt.timezone.utc)
+        started = now.astimezone().isoformat(timespec="seconds")
+        ts = now.isoformat(timespec="seconds").replace("+00:00", "Z")
+        write(self.proj / "s1.jsonl", [
+            {"type": "ai-title", "aiTitle": "Demo session"},
+            *turn("a", ts, cr=1000, out=100),
+            *bash_turn("b", ts, "cd ~/src/demo && python3 /opt/tools/delegate run --repo . --task X --brief b.md"),
+            cost(1.5),
+        ])
+        write(self.home / ".local/share/delegate/runs.jsonl", [
+            delegate_run("X", started, attempts=[attempt("m1", "ok", input=10, output=5, cache_read=3,
+                                                         cache_write=2, cost=0.01)]),
+        ])
+        out = self.home / "out"
+        with mock.patch("sys.stdout"):
+            cu.main(["report", "--out", str(out)])
+        text = next(out.glob("*-W*.md")).read_text()
+        self.assertIn("| X | implementation | merged | 1 | no | no | $0.01 | src-demo: s1 |", text)
+        self.assertIn("| src-demo: s1 | $1.50 | 1.1k | 1 | 20 | $0.01 |", text)
+        self.assertIn("| total | $1.50 | 1.1k | 1 | 20 | $0.01 |", text)
+
+    def test_report_delegated_empty_window(self):
+        old = (dt.datetime.now(dt.timezone.utc).astimezone()
+               - dt.timedelta(days=30)).isoformat(timespec="seconds")
+        write(self.home / ".local/share/delegate/runs.jsonl", [delegate_run("old-task", old, outcome=None)])
+        out = self.home / "out"
+        with mock.patch("sys.stdout"):
+            cu.main(["report", "--days", "7", "--out", str(out)])
+        text = next(out.glob("*-W*.md")).read_text()
+        self.assertIn("No delegate runs started in the last 7 days.", text)
+        self.assertNotIn("### By model", text)
 
 
 if __name__ == "__main__":

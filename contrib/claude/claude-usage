@@ -10,7 +10,8 @@ Reads ~/.claude/projects/<project>/<session>.jsonl, their subagents/agent-*.json
 turns after its last one (still running), uses the live cost the status line saved; with neither it is
 listed as "no cost record", never estimated.
 Finer breakdowns (per subagent, per context size) split a session's dollars by
-price-weighted token share.
+price-weighted token share. The report's Delegated work section also reads
+~/.local/share/delegate/runs.jsonl and links runs to the session that started them.
 """
 import argparse
 import collections
@@ -24,6 +25,9 @@ HOME = Path.home()
 # Price ratios relative to input tokens: cache read, 5 min cache write, 1 h cache write, output.
 WEIGHTS = dict(inp=1, cr=0.1, cw5=1.25, cw1=2, out=5)
 IDLE_COMPACT_GAP = 1800  # built-in idle compaction fires ~55 min after the last turn
+OUTCOMES = ("ok", "timeout", "api_error", "failed")
+TOKEN_KEYS = ("input", "output", "cache_read", "cache_write")
+DELEGATE_CALL = re.compile(r"(?<![\w./~-])(?:[\w./~-]*/)?delegate\s+(run|retry)\b")
 
 
 def jsonl(path):
@@ -37,6 +41,57 @@ def jsonl(path):
 
 def epoch(stamp):
     return dt.datetime.fromisoformat(stamp.replace("Z", "+00:00")).timestamp()
+
+
+def delegate_tasks(command):
+    """Task names in `delegate run ... --task NAME` and `delegate retry NAME` shell commands."""
+    starts = list(DELEGATE_CALL.finditer(command))
+    tasks = set()
+    for i, m in enumerate(starts):
+        tail = command[m.end():starts[i + 1].start() if i + 1 < len(starts) else len(command)]
+        if m.group(1) == "retry":
+            found = re.match(r"\s+['\"]?([A-Za-z0-9][A-Za-z0-9._-]*)", tail)
+            task = found.group(1) if found else ""
+        else:
+            found = re.search(r"--task(?:=|\s+)(?:\"([^\"]+)\"|'([^']+)'|([A-Za-z0-9][A-Za-z0-9._-]*))", tail)
+            task = next((x for x in found.groups() if x), "") if found else ""
+        if task:
+            tasks.add(task)
+    return tasks
+
+
+def load_runs(days):
+    """Delegate runs whose `started` time falls in the window, oldest first."""
+    cut = time.time() - days * 86400
+    out = []
+    try:
+        fh = (HOME / ".local" / "share" / "delegate" / "runs.jsonl").open(encoding="utf-8", errors="replace")
+    except OSError:
+        return out
+    with fh:
+        for line in fh:
+            try:
+                r = json.loads(line)
+                started = epoch(str(r["started"]))
+            except (KeyError, TypeError, ValueError):
+                continue
+            if started >= cut:
+                r["_started"] = started
+                out.append(r)
+    return sorted(out, key=lambda r: r["_started"])
+
+
+def attempt_tokens(attempts):
+    tokens = collections.Counter()
+    for a in attempts:
+        for k in TOKEN_KEYS:
+            tokens[k] += a.get(k) or 0
+    return tokens
+
+
+def go_cost(attempts):
+    # shortcut: Go cost uses pi's off-peak catalog prices, so DeepSeek peak hours are undercounted; upgrade if peak use becomes common.
+    return sum(a.get("cost") or 0 for a in attempts)
 
 
 def project_label(slug):
@@ -61,7 +116,7 @@ def ctx(c):
 def parse(path):
     """One transcript: deduped turns, title, first prompt, last cost-state, compactions, repeat reads."""
     s = dict(turns=[], title=None, first=None, cost_state=None, after=0, compactions=[],
-             repeats=collections.Counter())
+             repeats=collections.Counter(), tasks=set())
     seen, read = set(), set()
     for d in jsonl(path):
         t, m = d.get("type"), d.get("message") or {}
@@ -81,11 +136,15 @@ def parse(path):
         elif t == "assistant":
             # Each content block is its own line, repeating the message id and its usage.
             for b in m.get("content") or []:
-                if isinstance(b, dict) and b.get("type") == "tool_use" and b.get("name") == "Read":
-                    p = (b.get("input") or {}).get("file_path")
-                    if p in read:
-                        s["repeats"][p] += 1
-                    read.add(p)
+                if isinstance(b, dict) and b.get("type") == "tool_use":
+                    if b.get("name") == "Read":
+                        p = (b.get("input") or {}).get("file_path")
+                        if p in read:
+                            s["repeats"][p] += 1
+                        read.add(p)
+                    if str(b.get("name") or "").lower() in ("bash", "shell"):
+                        inp = b.get("input") or {}
+                        s["tasks"].update(delegate_tasks(str(inp.get("command") or inp.get("cmd") or "")))
             u = m.get("usage")
             if not u or m.get("id") in seen or m.get("model") == "<synthetic>":
                 continue
@@ -145,6 +204,7 @@ def load(days):
                 pass
             a["model"] = collections.Counter(t["model"] for t in a["turns"]).most_common(1)[0][0] if a["turns"] else None
             s["subs"].append(a)
+            s["tasks"].update(a["tasks"])
         total = sum(weight(t["c"]) for x in [s, *s["subs"]] for t in x["turns"])
         s["per_unit"] = s["cost"] / total if s["cost"] and total else 0  # dollars per weighted token
         sessions.append(s)
@@ -175,6 +235,14 @@ def money(x):
     return f"${x:,.2f}"
 
 
+def go_money(x):
+    return f"${x:,.4f}" if 0 < x < 0.01 else money(x)
+
+
+def tok(x):
+    return f"{x / 1e6:.1f}M" if x >= 1e6 else f"{x / 1e3:.1f}k" if x >= 1e3 else str(x)
+
+
 def mtok(x):
     return f"{x / 1e6:.1f}M"
 
@@ -185,6 +253,105 @@ def cell(x):
 
 def table(head, rows):
     return [f"| {' | '.join(head)} |", "|" + "---|" * len(head)] + [f"| {' | '.join(cell(c) for c in r)} |" for r in rows]
+
+
+def codex_delegates(days):
+    """Task -> Codex session ids that ran a delegate command in the window."""
+    cut = time.time() - days * 86400
+    out = collections.defaultdict(set)
+    for f in (HOME / ".codex" / "sessions").glob("**/*.jsonl"):
+        if f.stat().st_mtime < cut:
+            continue
+        sid = None
+        for d in jsonl(f):
+            p = d.get("payload") or {}
+            if d.get("type") == "session_meta":
+                sid = p.get("session_id") or p.get("id") or sid
+            elif p.get("type") in ("custom_tool_call", "function_call"):
+                text = p.get("input") if p.get("input") is not None else p.get("arguments")
+                for task in delegate_tasks(str(text or "")):
+                    out[task].add(sid or f.stem)
+    return out
+
+
+def delegated(args, runs, sessions):
+    """The report's Delegated work section: per model, per task, and session comparison."""
+    out = ["", "## Delegated work", ""]
+    if not runs:
+        return out + [f"No delegate runs started in the last {args.days} days."]
+
+    links = collections.defaultdict(set)
+    for s in sessions:
+        for task in s["tasks"]:
+            links[task].add(("claude", s["id"]))
+    for task, sids in codex_delegates(args.days).items():
+        for sid in sids:
+            links[task].add(("codex", sid))
+    claude_by_id = {s["id"]: s for s in sessions}
+    labels = {("claude", s["id"]): f"{s['project']}: {s['id'][:8]}" for s in sessions}
+    for task, keys in links.items():
+        for key in keys:
+            if key[0] == "codex":
+                labels.setdefault(key, f"codex: {key[1][:8]}")
+
+    by_model = collections.defaultdict(lambda: dict(attempts=[], outcomes=collections.Counter(), tokens=collections.Counter()))
+    for r in runs:
+        for a in r.get("attempts") or []:
+            model = a.get("model") or "?"
+            row = by_model[model]
+            row["attempts"].append(a)
+            row["outcomes"][a.get("outcome") or "?"] += 1
+            for k in TOKEN_KEYS:
+                row["tokens"][k] += a.get(k) or 0
+    out += ["### By model", ""]
+    out += table(["model", "attempts", *OUTCOMES, "input", "output", "cache read", "cache write", "Go $"],
+                 [(m, len(x["attempts"]), *(str(x["outcomes"][o]) for o in OUTCOMES),
+                   *(tok(x["tokens"][k]) for k in TOKEN_KEYS), go_money(go_cost(x["attempts"])))
+                  for m, x in sorted(by_model.items())])
+
+    out += ["", "### By task", ""]
+    task_rows = []
+    for r in runs:
+        attempts = r.get("attempts") or []
+        models = collections.Counter(a.get("model") for a in attempts if a.get("model"))
+        linked = sorted(labels.get(k, k[1]) for k in links.get(r.get("task"), ()))
+        retried = any(a.get("retry") for a in attempts) or any(n > 1 for n in models.values())
+        task_rows.append((r.get("task") or "?", r.get("chain") or "", r.get("outcome") or "open", str(len(attempts)),
+                          "yes" if len(models) > 1 else "no", "yes" if retried else "no",
+                          go_money(go_cost(attempts)), ", ".join(linked) or "—"))
+    out += table(["task", "chain", "outcome", "attempts", "fallback", "retried", "Go $", "sessions"], task_rows)
+
+    by_link = collections.defaultdict(list)
+    for r in runs:
+        for key in links.get(r.get("task"), ()):
+            by_link[key].append(r)
+    out += ["", "### Claude vs delegated", ""]
+    if not by_link:
+        return out + ["No linked sessions."]
+    rows, totals = [], collections.Counter()
+    for key in sorted(by_link, key=lambda k: (k[0] != "claude", labels.get(k, k[1]))):
+        linked_runs = by_link[key]
+        attempts = [a for r in linked_runs for a in r.get("attempts") or []]
+        delegated_tokens = sum(attempt_tokens(attempts).values())
+        delegated_cost = go_cost(attempts)
+        if key[0] == "claude" and key[1] in claude_by_id:
+            s = claude_by_id[key[1]]
+            claude_tokens = sum(sum(t["c"].values()) for x in [s, *s["subs"]] for t in x["turns"])
+            claude_cost = s["cost"]
+        else:
+            claude_tokens, claude_cost = None, None
+        rows.append((labels.get(key, key[1]), money(claude_cost) if claude_cost is not None else "—",
+                     tok(claude_tokens) if claude_tokens is not None else "—", len(linked_runs),
+                     tok(delegated_tokens), go_money(delegated_cost)))
+        totals["claude_cost"] += claude_cost or 0
+        totals["claude_tokens"] += claude_tokens or 0
+        totals["runs"] += len(linked_runs)
+        totals["delegated_tokens"] += delegated_tokens
+        totals["delegated_cost"] += delegated_cost
+    rows.append(("total", money(totals["claude_cost"]), tok(totals["claude_tokens"]), totals["runs"],
+                 tok(totals["delegated_tokens"]), go_money(totals["delegated_cost"])))
+    out += table(["session", "Claude $", "Claude tokens", "runs", "delegated tokens", "Go $"], rows)
+    return out
 
 
 def by_key(sessions, by):
@@ -301,6 +468,8 @@ def report(args):
     out += table(["project", "sessions", "input", "cached input", "output"],
                  [(p, c["sessions"], mtok(c["input_tokens"]), mtok(c["cached_input_tokens"]), mtok(c["output_tokens"]))
                   for p, c in sorted(cx.items(), key=lambda kv: -kv[1]["input_tokens"])]) if cx else ["No Codex sessions."]
+
+    out += delegated(args, load_runs(args.days), sessions)
 
     args.out.mkdir(parents=True, exist_ok=True)
     path = args.out / week_file(now)

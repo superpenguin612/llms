@@ -107,7 +107,8 @@ def cache_segments(data, now):
         if left <= 0 or pc.get("warm") is False:
             out.append(fg(RED, "cache cold" + (": %s" % human(cold) if cold else "")))
         else:
-            seg = "cache %dm" % (left // 60)
+            # The clock time stays right between redraws; the countdown alone went stale while idle.
+            seg = "cache till %s" % time.strftime("%H:%M", time.localtime(exp))
             if left < 300 and cold:
                 seg += " (cold: %s)" % human(cold)
             out.append(fg(RED if left < 600 else CYAN, seg))

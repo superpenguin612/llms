@@ -1,7 +1,7 @@
 import type { On } from 'claude-code'
 import { expect, test } from 'claude-code/testing'
 
-import { activity, fold, parseSession, pending, segmentOf, sum, type RunRecord, type Segment } from './delegate'
+import { activity, fold, parseSession, pending, plain, segmentOf, sum, type RunRecord, type Segment } from './delegate'
 import { ERROR_SESSION, OK_SESSION } from './fixture'
 
 const R = '/h/.local/share/delegate/runs'
@@ -105,6 +105,13 @@ test('a pi session parses into transcript segments', () => {
   })
   // A retry's attempt takes the second segment of the shared file.
   expect(segmentOf([first, retry], ['a', 'b', 'b'], 2)).toBe(retry)
+})
+
+test('escape sequences in a log are dropped: a pane refuses control characters', () => {
+  const colored = OK_SESSION.replace('c1da6e4 smoke: init', '\\u001b[1;32mc1da6e4\\u001b[0m smoke: init\\r')
+  const tool = parseSession(colored)[0]!.items[1] as { output: string }
+  expect(tool.output).toContain('c1da6e4 smoke: init\n')
+  expect(plain('a\x1b]0;title\x07b\tc\x00')).toBe('ab\tc')
 })
 
 test('output past six lines folds', () => {

@@ -41,10 +41,18 @@ export const sum = (us: Usage[]) =>
 
 export const totalTokens = (u: Usage) => u.input + u.output + u.cache_read + u.cache_write
 
+// A pane refuses text holding control characters: drop terminal escape sequences (colored tool
+// output) and any other control character but newline and tab.
+export const plain = (text: string) =>
+  text
+    .replace(/\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[@-_]?/g, '')
+    .replace(/\r\n?/g, '\n')
+    .replace(/[\x00-\x08\x0b-\x1f\x7f]/g, '')
+
 const parseLines = (text: string): unknown[] =>
   text.split('\n').flatMap(line => {
     try {
-      return line.trim() ? [JSON.parse(line)] : []
+      return line.trim() ? [JSON.parse(line, (_, v) => (typeof v === 'string' ? plain(v) : v))] : []
     } catch {
       return [] // a line still being written, or cut by the tail read
     }

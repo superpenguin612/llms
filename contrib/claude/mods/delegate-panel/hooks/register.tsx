@@ -15,6 +15,7 @@ import {
   parseRecords,
   parseSession,
   pending,
+  plain,
   resultInfo,
   segmentOf,
   stateOf,
@@ -33,7 +34,7 @@ const following = atom({ plugin: 'delegate-panel', key: 'following' } as const, 
 
 type $ = EngineInterface
 
-const readText = ($: $, path: string) => $.fs.read(path).then(t => t as string, () => undefined)
+const readText = ($: $, path: string) => $.fs.read(path).then(t => plain(t as string), () => undefined)
 
 // shortcut: a log past the 4 MiB read cap shows its last ~4 MiB only (read through `tail`), so a
 // retry's segment can be misnumbered and early entries are gone; upgrade if workers' logs grow that large.
@@ -42,7 +43,7 @@ const readLog = async ($: $, path: string) => {
   if (size < 0) return ''
   if (size < READ_CAP) return (await readText($, path)) ?? ''
   const tail = await $.process.run(['tail', '-c', String(READ_CAP - 1024), path]).catch(() => undefined)
-  return tail?.stdout ?? ''
+  return plain(tail?.stdout ?? '')
 }
 
 // Live as delegate itself decides it: a `running` marker whose PID is alive (Linux /proc).

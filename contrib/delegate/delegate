@@ -195,9 +195,19 @@ def cmd_run(a):
     marker.write_text(str(os.getpid()))
     save(rec)
     try:
-        rec["attempts"].append(attempt(rec, chain[0], wt, brief, key))
-        rec["status"] = rec["attempts"][-1]["outcome"]
-        save(rec)
+        for i, model in enumerate(chain):
+            att = attempt(rec, model, wt, brief, key)
+            rec["attempts"].append(att)
+            rec["status"] = att["outcome"]
+            save(rec)
+            if att["outcome"] not in ("timeout", "api_error") or i == len(chain) - 1:
+                break
+            # Infrastructure failure: keep the attempt's commits, start the next model from the base.
+            if git(wt, "rev-parse", "HEAD") != rec["base_commit"]:
+                git(wt, "branch", "-f", f"{rec['branch']}@{model}", "HEAD")
+            git(wt, "reset", "-q", "--hard", rec["base_commit"])
+            git(wt, "clean", "-qfd")
+            (run / "result.md").unlink(missing_ok=True)
     finally:
         marker.unlink()
     summary(rec)

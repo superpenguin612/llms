@@ -48,6 +48,7 @@ FAKE_PI = textwrap.dedent("""\
     log()
     (run / "result.md").write_text(f"status: done\\nby {model}\\n")
     if model.startswith("err"):
+        Path("junk.txt").write_text("untracked")
         log("error", 0)
         print("429: quota exceeded", file=sys.stderr)
         sys.exit(1)
@@ -209,6 +210,44 @@ class TestRun(DelegateBase):
         chains = json.loads((SRC / "chains.json").read_text())
         self.assertEqual(chains["implementation"], ["deepseek-v4.1-flash", "kimi-k2.7-code"])
         self.assertEqual(chains["bulk"], [])
+
+
+class TestFallback(DelegateBase):
+    def outcomes(self, task):
+        return [(a["model"], a["outcome"]) for a in self.record(task)["attempts"]]
+
+    def test_api_error_falls_back_keeping_commits_on_backup_branch(self):
+        self.chains(implementation=["err-a", "ok-b"])
+        p = self.run_task("t1")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(self.outcomes("t1"), [("err-a", "api_error"), ("ok-b", "ok")])
+        backup = self.git("log", "--format=%s", "main..delegate/t1@err-a").splitlines()
+        self.assertEqual(len(backup), 1)
+        self.assertIn("err-a", backup[0])
+        kept = self.git("log", "--format=%s", "main..delegate/t1").splitlines()
+        self.assertEqual(len(kept), 1)
+        self.assertIn("ok-b", kept[0])
+        self.assertFalse((self.data / "worktrees/repo/t1/junk.txt").exists())
+        self.assertIn("by ok-b", (self.data / "runs/t1/result.md").read_text())
+        self.assertEqual(self.record("t1")["status"], "ok")
+
+    def test_timeout_falls_back(self):
+        self.chains(implementation=["slow-a", "ok-b"])
+        p = self.run_task("t1", "--timeout", "1s")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(self.outcomes("t1"), [("slow-a", "timeout"), ("ok-b", "ok")])
+        self.assertEqual(self.git("branch", "--list", "delegate/t1@*"), "")  # no commits, no backup
+
+    def test_failed_stops_the_chain(self):
+        self.chains(implementation=["fail-a", "ok-b"])
+        self.assertEqual(self.run_task("t1").returncode, 1)
+        self.assertEqual(self.outcomes("t1"), [("fail-a", "failed")])
+
+    def test_result_removed_before_next_model(self):
+        self.chains(implementation=["err-a", "fail-b"])
+        self.assertEqual(self.run_task("t1").returncode, 1)
+        self.assertEqual(self.outcomes("t1"), [("err-a", "api_error"), ("fail-b", "failed")])
+        self.assertFalse((self.data / "runs/t1/result.md").exists())
 
 
 class TestSandbox(DelegateBase):

@@ -42,8 +42,11 @@ A **vault** is a folder with `kb.yaml` (its profile). It is also an Obsidian vau
 
 ## Bulk work
 
-- Delegate bulk capture, triage review and mining to subagents running a small, fast model at high effort (in Claude Code: Haiku at `xhigh`). Keep the orchestrating session for decisions, review, `kb build` and commits.
-- When several agents share one vault, give each agent its own inbox subtree (`kb triage scan inbox/<who>/<batch>`) and a disjoint list of record ids. Have them check that an id is free before capturing it, and let only the orchestrator commit.
+- Bulk capture, triage review and mining go to workers started with `delegate run --here --repo <vault repo> --chain bulk --task <name> --brief <file>`: one record (or one inbox batch) per worker, up to 3 running in the background at once. Keep the orchestrating session for decisions, review, `kb build` and commits. The bulk chain's model is set in `contrib/delegate/chains.json`.
+- Give each worker a disjoint set of record ids, and where several share one vault, its own inbox subtree (`kb triage scan inbox/<who>/<batch>`).
+- The brief lists the ids; the procedures to read (this `SKILL.md`, [capture.md](references/capture.md) "Mine (your part)" and "Quoting rules", [writing.md](references/writing.md), the vault's `kb.yaml` and `README.md`, `kb guide`); the limits (touch only its own records and new entity stubs, no `kb build`, no `kb capture` unless the brief is a capture task, check an id is free before capturing it); and the acceptance command `kb lint --detailed 2>&1 | grep -E '<its ids joined by |>'`, which must print nothing.
+- It also says, overriding the worker rules' commit step, that workers sharing a vault must not commit: parallel commits in one checkout race on git's index lock. You review each `result.md` and its records, run `kb build` and `kb lint`, commit, then `delegate clean <task>`. Reject a worker with one `delegate retry` and written feedback; after that, mine the record yourself.
+- Where `delegate` isn't installed, fall back to subagents on a small, fast model at high effort.
 
 ## Setting up a new vault
 

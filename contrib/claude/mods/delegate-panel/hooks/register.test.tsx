@@ -159,6 +159,8 @@ for (const surface of ['terminal', 'desktop'] as const) {
     // The jump control sits at the top, right under the header, and opening scrolled to the end.
     const keys = (await ui.findAll({ type: 'Button' })).map(b => b.key)
     expect(keys.slice(0, 2)).toEqual(['back', 'end'])
+    // The way back is repeated at the bottom, where following leaves the view.
+    expect(keys.slice(-2)).toEqual(['back-end', 'close'])
     expect((await ui.find({ key: 'end' }))?.text).toBe('↓ jump to end (e)')
     // The kit has no scroller, so the plugin's scroll rejects; that it was asked shows on the status line.
     expect(statuses).toEqual(['delegate: jump to end failed: HooksError: no implementation for ui.scroll'])
@@ -183,7 +185,7 @@ for (const surface of ['terminal', 'desktop'] as const) {
     expect((await ui.find({ key: fold1!.key! }))?.text).toBe('fold')
 
     // The live run's current attempt reads the newest log no attempt owns yet.
-    await ui.press({ key: 'back' })
+    await ui.press({ key: 'back-end' })
     await ui.press({ key: 'open-live-b' })
     expect(await ui.find({ type: 'Text', text: /m2 · attempt 2\/2 \(running\)/ })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: /fell back to m2 · running bash: pwd/ })).toBeDefined()

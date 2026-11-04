@@ -158,7 +158,8 @@ export const register: Register = on => {
       await $.ui.close({ id: PANE })
       return { text: 'Delegate pane closed.' }
     }
-    await $.ui.open({ id: PANE, title: TITLE })
+    const opened = await $.ui.open({ id: PANE, title: TITLE })
+    if (!opened.isPlaced) return { text: `Delegate pane not drawn yet: ${opened.reason}` }
     return { text: 'Delegate pane opened. /delegate again or q in the pane closes it.' }
   })
 
@@ -227,6 +228,7 @@ export const register: Register = on => {
     const usage = attempt?.usage ?? segment?.usage
     const isFirst = !attempts.slice(0, index).some(a => a.session === attempt?.session)
 
+    const back = () => update($, view, () => ({}))
     const toggle = (id: string) => update($, expanded, list => (list.includes(id) ? list.filter(x => x !== id) : [...list, id]))
 
     const draw = (item: Item, i: number) => {
@@ -284,8 +286,8 @@ export const register: Register = on => {
     return (
       <Box flexDirection="column">
         <Box flexDirection="row" gap={1}>
-          <Button key="back" hotkey="b" onPress={() => update($, view, () => ({}))}>
-            runs
+          <Button key="back" hotkey="b" onPress={back}>
+            ← all runs (b)
           </Button>
           <Text bold>{rec.task}</Text>
           <Text dimColor>{duration(row.elapsed)}</Text>
@@ -337,9 +339,15 @@ export const register: Register = on => {
             <Text>{row.resultMd.trim()}</Text>
           </Box>
         )}
-        <Button key="close" hotkey="q" plain dimColor onPress={() => $.ui.close({ id: PANE })}>
-          close
-        </Button>
+        {/* Following keeps the view at its end, so the way back is repeated here. */}
+        <Box flexDirection="row" gap={2}>
+          <Button key="back-end" onPress={back}>
+            ← all runs (b)
+          </Button>
+          <Button key="close" hotkey="q" plain dimColor onPress={() => $.ui.close({ id: PANE })}>
+            close (q)
+          </Button>
+        </Box>
       </Box>
     )
   })

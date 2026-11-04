@@ -80,5 +80,5 @@ Third-party skills are pinned as git submodules in `vendor/` (updates only when 
 | `vendor/humanizer` | remove AI-writing patterns from prose |
 | `vendor/mattpocock-skills` | mattpocock/skills; `grilling` (hard design-tree interviews), `tdd` and `diagnosing-bugs` are linked |
 
-`git submodule update --init`, then `contrib/link-skills` links them (and this repo's `knowledge-base`, `handoff` and `design-walkthrough`) into `~/.codex/skills` and `~/.claude/skills`. In Claude Code, ponytail is installed as a plugin instead (`claude plugin install …`), because its plugin carries hooks.
+`git submodule update --init`, then `contrib/link-skills` links them (and this repo's `knowledge-base`, `handoff` and `design-walkthrough`) into `~/.codex/skills` and `~/.claude/skills`.
 

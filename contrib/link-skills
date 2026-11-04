@@ -1,7 +1,6 @@
 #!/bin/sh
 # Link kb's skills and the vendored skills (git submodules in vendor/) into each agent's skills folder.
-# Claude Code gets ponytail as a plugin instead (the plugin carries hooks), so it's linked for Codex
-# only. Re-run after `git submodule update`.
+# Re-run after `git submodule update`.
 set -eu
 here=$(cd "$(dirname "$0")/.." && pwd)
 link() { mkdir -p "$1"; ln -sfn "$2" "$1/$(basename "$2")"; }
@@ -11,5 +10,5 @@ skills="$here/skills/knowledge-base $here/skills/handoff $here/skills/design-wal
 
 for s in $skills; do link "$HOME/.codex/skills" "$s"; link "$HOME/.claude/skills" "$s"; done
 for s in "$here"/vendor/ponytail/skills/*; do
-  [ -f "$s/SKILL.md" ] && link "$HOME/.codex/skills" "$s"
+  [ -f "$s/SKILL.md" ] && link "$HOME/.codex/skills" "$s" && link "$HOME/.claude/skills" "$s"
 done

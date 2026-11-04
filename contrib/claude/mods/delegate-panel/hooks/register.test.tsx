@@ -114,7 +114,7 @@ for (const surface of ['terminal', 'desktop'] as const) {
     const ui = await $.ui.mount({ ...PANE, surface })
 
     const rows = await ui.findAll({ type: 'Button' })
-    expect(rows.map(b => b.key)).toEqual(['open-live-b', 'open-done-a'])
+    expect(rows.map(b => b.key)).toEqual(['open-live-b', 'open-done-a', 'close'])
     expect((await ui.find({ key: 'open-live-b' }))?.text).toMatch(/live-b fell back m2 · 1m30s/)
     expect((await ui.find({ key: 'open-done-a' }))?.text).toMatch(/done-a done deepseek · 48s/)
     expect(await ui.find({ type: 'Text', text: 'Added hello.txt and bye.txt.' })).toBeDefined()

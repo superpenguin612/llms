@@ -9,7 +9,8 @@
 The worker commits on `delegate/<task>` (or in place with --here) and writes `result.md` in its
 run folder (~/.local/share/delegate/runs/<task>/). On a timeout or API error the next model in
 the chain starts over from the base commit; the failed attempt's commits stay on
-`delegate/<task>@<model>`. `retry` continues the last pi session once with written feedback. Every run is one line in ~/.local/share/delegate/runs.jsonl.
+`delegate/<task>@<model>`. A worker killed by hand (SIGTERM or SIGKILL to it, or to delegate
+itself) is `killed`: the chain stops there. `retry` continues the last pi session once with written feedback. Every run is one line in ~/.local/share/delegate/runs.jsonl.
 Python 3 stdlib only.
 """
 
@@ -19,6 +20,7 @@ import json
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import time
@@ -29,14 +31,29 @@ DATA = Path.home() / ".local/share/delegate"
 RUNS = DATA / "runs"
 LOG = DATA / "runs.jsonl"
 MAX_LIVE = 3
+KILL_AFTER = 30  # seconds `timeout` waits after SIGTERM before it sends SIGKILL
 # The worker's environment starts empty plus these (if set), the Go key and DELEGATE_RUN.
 ALLOW = ("PATH", "HOME", "USER", "LANG", "TERM", "SHELL", "TMPDIR")
 # Credentials hidden from the worker, relative to ~. A new credential location must be added here.
 HIDE = ("creds", ".ssh", ".claude/.credentials.json", ".codex/auth.json", ".config/gh", ".pi/agent/auth.json")
 
 
+STOP = None  # signal number, set when delegate itself is told to stop
+
+
 def die(msg):
     sys.exit(f"delegate: {msg}")
+
+
+def stop(signum, frame):
+    """SIGTERM/SIGINT to delegate: stop the worker, record it as killed, then exit."""
+    global STOP
+    STOP = signum
+
+
+def seconds(s):
+    """'90s', '45m' or '1h' as seconds."""
+    return int(s[:-1]) * {"s": 1, "m": 60, "h": 3600}[s[-1]] if s[-1].isalpha() else int(s)
 
 
 def git(cwd, *args):
@@ -151,17 +168,35 @@ def attempt(rec, model, message, key, session=None):
     with open(run / "pi.log", "a") as log:
         log.write(f"=== {model} {time.strftime('%Y-%m-%dT%H:%M:%S')}\n")
         log.flush()
-        rc = subprocess.run(["timeout", "--kill-after=30", rec["timeout"], *sandbox(workdir, run, key, argv)],
-                            stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT).returncode
+        p = subprocess.Popen(["timeout", f"--kill-after={KILL_AFTER}", rec["timeout"],
+                              *sandbox(workdir, run, key, argv)],
+                             stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT)
+        while p.poll() is None and STOP is None:
+            time.sleep(0.1)
+        if STOP is not None:  # timeout forwards the signal to the sandboxed worker
+            p.terminate()
+            try:
+                p.wait(KILL_AFTER)
+            except subprocess.TimeoutExpired:
+                p.kill()
+                p.wait()
+        rc = p.returncode
+    elapsed = time.time() - start
     if not session:
         new = sorted(set(sessions.glob("*.jsonl")) - before)
         session = str(new[-1]) if new else None
-    tot, stop = usage(session, skip)
-    if rc in (124, 137):  # 137: still running after --kill-after
+    tot, reason = usage(session, skip)
+    # timeout exits 124 at the deadline and 137 only after --kill-after; a signal exit well
+    # before the deadline is someone killing the worker (or the sandbox) by hand.
+    if STOP is not None:
+        outcome = "killed"
+    elif rc in (124, 137) and elapsed >= seconds(rec["timeout"]):
         outcome = "timeout"
+    elif rc < 0 or rc >= 128:  # timeout sometimes re-raises the signal on itself
+        outcome = "killed"
     elif rc == 0 and (run / "result.md").exists():
         outcome = "ok"
-    elif rc and stop == "error":  # pi logs a failed API call as stopReason "error" and exits 1
+    elif rc and reason == "error":  # pi logs a failed API call as stopReason "error" and exits 1
         outcome = "api_error"
     else:
         outcome = "failed"
@@ -220,6 +255,8 @@ def cmd_run(a):
         (run / "brief.md").write_text(brief)
         save(rec)
         for i, model in enumerate(chain):
+            if STOP is not None:  # stopped between attempts
+                break
             att = attempt(rec, model, brief, key)
             rec["attempts"].append(att)
             rec["status"] = att["outcome"]
@@ -237,6 +274,9 @@ def cmd_run(a):
             git(wt, "clean", "-qfd")
     finally:
         (run / "running").unlink()
+    if STOP is not None and rec["status"] != "killed":
+        rec["status"] = "killed"
+        save(rec)
     summary(rec)
     return 0 if rec["status"] == "ok" else 1
 
@@ -346,6 +386,8 @@ def main():
     p.add_argument("task", nargs="?")
     p.set_defaults(fn=cmd_status)
     a = ap.parse_args()
+    signal.signal(signal.SIGTERM, stop)
+    signal.signal(signal.SIGINT, stop)
     return a.fn(a)
 
 

@@ -7,6 +7,7 @@ import subprocess
 import sys
 import tempfile
 import textwrap
+import time
 import unittest
 from pathlib import Path
 
@@ -24,6 +25,8 @@ FAKE_PI = textwrap.dedent("""\
         f.write(json.dumps({"argv": a, "cwd": os.getcwd(),
                             "stdin_null": os.path.samefile("/proc/self/fd/0", "/dev/null")}) + "\\n")
     model = a[a.index("--model") + 1]
+    if model.startswith("sig"):  # killed by hand, well before any timeout
+        os.kill(os.getpid(), 9)
     if "--session" in a:
         session = Path(a[a.index("--session") + 1])
     else:
@@ -172,6 +175,32 @@ class TestRun(DelegateBase):
         self.assertEqual(p.returncode, 1)
         self.assertEqual(self.record("t1")["status"], "timeout")
 
+    def test_killed_worker_stops_the_chain(self):
+        self.chains(implementation=["sig-a", "ok-b"])
+        p = self.run_task("t1")
+        self.assertEqual(p.returncode, 1)
+        r = self.record("t1")
+        self.assertEqual([(a["model"], a["outcome"]) for a in r["attempts"]], [("sig-a", "killed")])
+        self.assertEqual(r["status"], "killed")
+
+    def test_sigterm_to_delegate_records_killed(self):
+        self.chains(implementation=["slow-a", "ok-b"])
+        p = subprocess.Popen([sys.executable, str(self.tool / "delegate"), "run", "--repo", str(self.repo),
+                              "--task", "t1", "--brief", str(self.brief)],
+                             cwd=self.repo, env=self.env, stdout=subprocess.PIPE,
+                             stderr=subprocess.PIPE, text=True)
+        argv = self.data / "runs" / "t1" / "argv.jsonl"
+        deadline = time.time() + 30
+        while not argv.exists() and time.time() < deadline:
+            time.sleep(0.05)
+        p.terminate()
+        p.communicate(timeout=30)
+        self.assertNotEqual(p.returncode, 0)
+        r = self.record("t1")
+        self.assertEqual([(a["model"], a["outcome"]) for a in r["attempts"]], [("slow-a", "killed")])
+        self.assertEqual(r["status"], "killed")
+        self.assertFalse((self.data / "runs" / "t1" / "running").exists())
+
     def test_status(self):
         self.chains(implementation=["ok-a"])
         self.run_task("t1")
@@ -244,6 +273,11 @@ class TestFallback(DelegateBase):
         self.chains(implementation=["fail-a", "ok-b"])
         self.assertEqual(self.run_task("t1").returncode, 1)
         self.assertEqual(self.outcomes("t1"), [("fail-a", "failed")])
+
+    def test_killed_does_not_fall_back(self):
+        self.chains(implementation=["sig-a", "ok-b"])
+        self.assertEqual(self.run_task("t1").returncode, 1)
+        self.assertEqual(self.outcomes("t1"), [("sig-a", "killed")])
 
     def test_result_removed_before_next_model(self):
         self.chains(implementation=["err-a", "fail-b"])

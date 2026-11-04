@@ -25,7 +25,7 @@ HOME = Path.home()
 # Price ratios relative to input tokens: cache read, 5 min cache write, 1 h cache write, output.
 WEIGHTS = dict(inp=1, cr=0.1, cw5=1.25, cw1=2, out=5)
 IDLE_COMPACT_GAP = 1800  # built-in idle compaction fires ~55 min after the last turn
-OUTCOMES = ("ok", "timeout", "api_error", "failed")
+OUTCOMES = ("ok", "timeout", "api_error", "failed", "killed")
 TOKEN_KEYS = ("input", "output", "cache_read", "cache_write")
 DELEGATE_CALL = re.compile(r"(?<![\w./~-])(?:[\w./~-]*/)?delegate\s+(run|retry)\b")
 

@@ -152,7 +152,7 @@ def attempt(rec, model, message, key, session=None):
         log.write(f"=== {model} {time.strftime('%Y-%m-%dT%H:%M:%S')}\n")
         log.flush()
         rc = subprocess.run(["timeout", "--kill-after=30", rec["timeout"], *sandbox(workdir, run, key, argv)],
-                            stdout=log, stderr=subprocess.STDOUT).returncode
+                            stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT).returncode
     if not session:
         new = sorted(set(sessions.glob("*.jsonl")) - before)
         session = str(new[-1]) if new else None

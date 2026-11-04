@@ -21,7 +21,8 @@ FAKE_PI = textwrap.dedent("""\
     a = sys.argv[1:]
     run = Path(os.environ["DELEGATE_RUN"])
     with open(run / "argv.jsonl", "a") as f:
-        f.write(json.dumps({"argv": a, "cwd": os.getcwd()}) + "\\n")
+        f.write(json.dumps({"argv": a, "cwd": os.getcwd(),
+                            "stdin_null": os.path.samefile("/proc/self/fd/0", "/dev/null")}) + "\\n")
     model = a[a.index("--model") + 1]
     if "--session" in a:
         session = Path(a[a.index("--session") + 1])
@@ -132,6 +133,7 @@ class TestRun(DelegateBase):
         self.assertFalse((run / "running").exists())
         [call] = self.calls("t1")
         self.assertEqual(Path(call["cwd"]), wt)
+        self.assertTrue(call["stdin_null"])  # pi -p waits for EOF on an open stdin
         argv = call["argv"]
         self.assertEqual(argv[argv.index("--provider") + 1], "opencode-go")
         self.assertIn("-p", argv)

@@ -211,7 +211,7 @@ class TestRun(DelegateBase):
     def test_shipped_chains(self):
         chains = json.loads((SRC / "chains.json").read_text())
         self.assertEqual(chains["implementation"], ["deepseek-v4.1-flash", "kimi-k2.7-code"])
-        self.assertEqual(chains["bulk"], [])
+        self.assertEqual(chains["bulk"], ["glm-5.3-flash"])
 
 
 class TestFallback(DelegateBase):

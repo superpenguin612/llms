@@ -139,3 +139,36 @@ class TestCompactInstructions(HookCase):
         _, out, _ = self.run_hook("compact-instructions.sh", {"trigger": "manual"})
         self.assertTrue(out.startswith("## Checklist"))
         self.assertIn("Next steps", out)
+
+
+class TestStatusLine(HookCase):
+    def line(self, **data):
+        data.setdefault("model", {"display_name": "Opus 5.5"})
+        cmd = ["python3", str(HOOKS.parent / "statusline.py")]  # settings.json runs it the same way
+        out = subprocess.run(cmd, input=json.dumps(data), capture_output=True, text=True, env=self.env).stdout
+        return __import__("re").sub(r"\x1b\[[0-9;]*m", "", out)
+
+    def test_cache_context_and_extras(self):
+        now = time.time()
+        usage = {"input_tokens": 5, "cache_read_input_tokens": 300000, "cache_creation_input_tokens": 12000}
+        out = self.line(session_id="s", effort={"level": "high"},
+                        context_window={"current_usage": usage},
+                        prompt_cache={"warm": True, "expires_at": now + 2520, "hit_ratio": 0.98, "misses": 2,
+                                      "last_miss_cause": {"causes": ["model_switch"]}, "recache_tokens_if_cold": 312000},
+                        pr={"number": 12, "review_state": "approved"},
+                        cost={"total_cost_usd": 41.2, "total_lines_added": 120, "total_lines_removed": 30})
+        self.assertTrue(out.startswith("Opus 5.5 high"))
+        for part in ("ctx 312k", "cache 41m", "hit 98%", "2 misses: model switch", "#12 approved", "+120/-30", "$41.20"):
+            self.assertIn(part, out)
+        saved = json.loads((self.tmp / ".cache/claude-statusline/s.json").read_text())
+        self.assertEqual(saved, {"cost": 41.2})
+
+    def test_cache_nearly_cold_and_cold(self):
+        now = time.time()
+        pc = {"warm": True, "expires_at": now + 200, "recache_tokens_if_cold": 312000}
+        self.assertIn("cache 3m (cold: 312k)", self.line(prompt_cache=pc))
+        self.assertIn("cache cold: 312k", self.line(prompt_cache=dict(pc, expires_at=now - 5)))
+
+    def test_missing_fields(self):
+        self.assertEqual(self.line(), "Opus 5.5")
+        self.assertEqual(self.line(context_window={"current_usage": None}, prompt_cache=None), "Opus 5.5")

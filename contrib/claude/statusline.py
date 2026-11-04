@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 import json, os, subprocess, sys, time
-from datetime import datetime
 
 def fg(n, s):
     return "\x1b[38;5;%dm%s\x1b[0m" % (n, s)
@@ -66,65 +65,20 @@ def git_info(cwd):
 
 
 CACHE_DIR = os.path.expanduser("~/.cache/claude-statusline")
-CACHE_TTL = 3600  # main sessions use the 1 h prompt cache
 WARN, DANGER = 250000, 400000  # same thresholds as the context-notice hook
 
-def _scan(path, st):
-    """Keep the last reply's usage and time, reading only bytes appended since the last call."""
-    try:
-        size = os.path.getsize(path)
-    except OSError:
-        return st
-    if st.get("offset", 0) > size:  # file replaced: start over
-        st = {}
-    off = st.get("offset", 0)
-    if off == size:
-        return st
-    with open(path, "rb") as f:
-        f.seek(off)
-        chunk = f.read(size - off)
-    end = chunk.rfind(b"\n") + 1  # only complete lines
-    st = dict(st, offset=off + end)
-    for line in chunk[:end].splitlines():
-        if b'"usage"' not in line:
-            continue
-        try:
-            d = json.loads(line)
-        except Exception:
-            continue
-        u = (d.get("message") or {}).get("usage")
-        if d.get("type") == "assistant" and isinstance(u, dict) and not d.get("isSidechain"):
-            st["usage"], st["ts"] = u, d.get("timestamp")
-    return st
-
-def last_turn(data, usd):
-    """(usage, unix time) of the session's last reply, or None. Saves the live cost for claude-usage,
-    since Claude Code records a session's cost only when it exits."""
-    tp = data.get("transcript_path")
-    if not isinstance(tp, str) or not os.path.exists(tp):
-        return None
-    key = os.path.join(CACHE_DIR, "%s.json" % (data.get("session_id") or os.path.basename(tp)))
-    try:
-        st = json.load(open(key))
-    except Exception:
-        st = {}
-    st = _scan(tp, st)
-    if usd is not None:
-        st["cost"] = usd
+def save_cost(data, usd):
+    """Claude Code records a session's cost only when it exits; keep the live figure for claude-usage."""
+    sid = data.get("session_id")
+    if not isinstance(sid, str) or usd is None:
+        return
+    key = os.path.join(CACHE_DIR, sid + ".json")
     try:
         os.makedirs(CACHE_DIR, exist_ok=True)
-        json.dump(st, open(key + ".tmp", "w"))
+        json.dump({"cost": usd}, open(key + ".tmp", "w"))
         os.replace(key + ".tmp", key)
     except Exception:
         pass
-    u, ts = st.get("usage"), st.get("ts")
-    if not isinstance(u, dict) or not isinstance(ts, str):
-        return None
-    try:
-        t = datetime.fromisoformat(ts.replace("Z", "+00:00")).timestamp()
-    except ValueError:
-        return None
-    return u, t
 
 def human(n):
     for div, suf in ((1e9, "B"), (1e6, "M"), (1e3, "k")):
@@ -132,16 +86,39 @@ def human(n):
             return ("%.1f" % (n / div)).rstrip("0").rstrip(".") + suf
     return str(int(n))
 
-def turn_segments(turn, now):
-    u, t = turn
-    read = num(u.get("cache_read_input_tokens")) or 0
-    ctx = read + (num(u.get("cache_creation_input_tokens")) or 0) + (num(u.get("input_tokens")) or 0)
-    c = CTX_GREEN if ctx < WARN else CTX_YELLOW if ctx < DANGER else RED
-    out = [fg(c, "ctx " + human(ctx))]
-    left = int(t + CACHE_TTL - now)
-    out.append(fg(RED, "cache cold") if left <= 0 else fg(RED if left < 600 else CYAN, "cache %dm" % (left // 60)))
-    if ctx:
-        out.append(fg(LIGHT, "hit %d%%" % round(100.0 * read / ctx)))
+def obj(data, key):
+    v = data.get(key)
+    return v if isinstance(v, dict) else {}
+
+def context_segment(data):
+    u = obj(obj(data, "context_window"), "current_usage")  # null before the first reply and after /compact
+    if not u:
+        return None
+    ctx = sum(num(u.get(k)) or 0 for k in ("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens"))
+    return fg(CTX_GREEN if ctx < WARN else CTX_YELLOW if ctx < DANGER else RED, "ctx " + human(ctx))
+
+def cache_segments(data, now):
+    pc = obj(data, "prompt_cache")
+    out = []
+    exp, cold = num(pc.get("expires_at")), num(pc.get("recache_tokens_if_cold"))
+    if exp is not None:
+        left = int(exp - now)
+        if left <= 0 or pc.get("warm") is False:
+            out.append(fg(RED, "cache cold" + (": %s" % human(cold) if cold else "")))
+        else:
+            seg = "cache %dm" % (left // 60)
+            if left < 300 and cold:
+                seg += " (cold: %s)" % human(cold)
+            out.append(fg(RED if left < 600 else CYAN, seg))
+    hit = num(pc.get("hit_ratio"))
+    if hit is not None:
+        out.append(fg(LIGHT, "hit %d%%" % round(100 * hit)))
+    misses = num(pc.get("misses"))
+    if misses:
+        causes = obj(pc, "last_miss_cause").get("causes")
+        why = causes[0] if isinstance(causes, list) and causes and isinstance(causes[0], str) else None
+        out.append(fg(RED, "%d miss%s%s" % (misses, "" if misses == 1 else "es",
+                                            ": " + why.replace("_", " ") if why else "")))
     return out
 
 def main():
@@ -166,14 +143,13 @@ def main():
         if seg:
             parts.append(seg)
 
-    cost = data.get("cost")
-    usd = num(cost.get("total_cost_usd")) if isinstance(cost, dict) else None
-    try:
-        turn = last_turn(data, usd)
-    except Exception:
-        turn = None
-    if turn:
-        parts += turn_segments(turn, time.time())
+    cost = obj(data, "cost")
+    usd = num(cost.get("total_cost_usd"))
+    save_cost(data, usd)
+    seg = context_segment(data)
+    if seg:
+        parts.append(seg)
+    parts += cache_segments(data, time.time())
 
     ws = data.get("workspace") if isinstance(data.get("workspace"), dict) else {}
     cwd = ws.get("current_dir") or data.get("cwd")
@@ -183,6 +159,16 @@ def main():
         if g:
             seg += " " + fg(DIM, "(") + g + fg(DIM, ")")
         parts.append(seg)
+
+    pr = obj(data, "pr")
+    if num(pr.get("number")):
+        parts.append("#%d" % pr["number"] + (" " + pr["review_state"].replace("_", " ") if isinstance(pr.get("review_state"), str) else ""))
+    for label in (obj(data, "worktree").get("name"), obj(data, "agent").get("name")):
+        if isinstance(label, str) and label:
+            parts.append(fg(PURPLE, label))
+    added, removed = num(cost.get("total_lines_added")) or 0, num(cost.get("total_lines_removed")) or 0
+    if added or removed:
+        parts.append(fg(CTX_GREEN, "+%d" % added) + fg(DIM, "/") + fg(RED, "-%d" % removed))
 
     if usd is not None:
         parts.append("$%.2f" % usd)

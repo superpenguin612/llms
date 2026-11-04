@@ -1,0 +1,6 @@
+[Unit]
+Description=claude-usage: write the weekly Claude Code usage report
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/claude-usage report

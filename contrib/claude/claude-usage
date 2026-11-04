@@ -1,0 +1,318 @@
+#!/usr/bin/env python3
+"""claude-usage: where Claude Code (and Codex) tokens and dollars go.
+
+  claude-usage top [--days 30] [--by project|session|model]
+  claude-usage report [--days 7] [--out DIR]   # writes DIR/<ISO year>-W<week>.md
+
+Reads ~/.claude/projects/<project>/<session>.jsonl, their subagents/agent-*.jsonl, and
+~/.codex/sessions/**/*.jsonl. Dollars come from each session's last `cost-state` record
+(written when Claude Code exits; it includes subagent spend). A session with none, or with
+turns after its last one (still running), is listed as "no cost record", never estimated.
+Finer breakdowns (per subagent, per context size) split a session's dollars by
+price-weighted token share.
+"""
+import argparse
+import collections
+import datetime as dt
+import json
+import re
+import time
+from pathlib import Path
+
+HOME = Path.home()
+# Price ratios relative to input tokens: cache read, 5 min cache write, 1 h cache write, output.
+WEIGHTS = dict(inp=1, cr=0.1, cw5=1.25, cw1=2, out=5)
+IDLE_COMPACT_GAP = 1800  # built-in idle compaction fires ~55 min after the last turn
+
+
+def jsonl(path):
+    with open(path, encoding="utf-8", errors="replace") as f:
+        for line in f:
+            try:
+                yield json.loads(line)
+            except ValueError:
+                continue
+
+
+def epoch(stamp):
+    return dt.datetime.fromisoformat(stamp.replace("Z", "+00:00")).timestamp()
+
+
+def project_label(slug):
+    """Claude Code names project dirs after the cwd with non-alphanumerics as '-'; drop the home part."""
+    home = re.sub(r"[^A-Za-z0-9]", "-", str(HOME))
+    return "~" if slug == home else slug.removeprefix(home + "-")
+
+
+def week_file(day):
+    year, week, _ = (day - dt.timedelta(days=1)).isocalendar()  # a Monday run reports the week just ended
+    return f"{year}-W{week:02d}.md"
+
+
+def weight(c):
+    return sum(WEIGHTS[k] * v for k, v in c.items())
+
+
+def ctx(c):
+    return c["inp"] + c["cr"] + c["cw1"] + c["cw5"]
+
+
+def parse(path):
+    """One transcript: deduped turns, title, first prompt, last cost-state, compactions, repeat reads."""
+    s = dict(turns=[], title=None, first=None, cost_state=None, after=0, compactions=[],
+             repeats=collections.Counter())
+    seen, read = set(), set()
+    for d in jsonl(path):
+        t, m = d.get("type"), d.get("message") or {}
+        if t == "ai-title":
+            s["title"] = d.get("aiTitle") or d.get("title")
+        elif t == "cost-state":
+            s["cost_state"], s["after"] = d, 0
+        elif t == "system" and d.get("subtype") == "compact_boundary" and d.get("timestamp"):
+            gap = epoch(d["timestamp"]) - s["turns"][-1]["t"] if s["turns"] else 0
+            s["compactions"].append(((d.get("compactMetadata") or {}).get("trigger"), gap))
+        elif t == "user" and s["first"] is None:
+            c = m.get("content")
+            text = c if isinstance(c, str) else next(
+                (b.get("text", "") for b in c or [] if isinstance(b, dict) and b.get("type") == "text"), "")
+            if text and not text.startswith("<"):
+                s["first"] = " ".join(text.split())[:80]
+        elif t == "assistant":
+            # Each content block is its own line, repeating the message id and its usage.
+            for b in m.get("content") or []:
+                if isinstance(b, dict) and b.get("type") == "tool_use" and b.get("name") == "Read":
+                    p = (b.get("input") or {}).get("file_path")
+                    if p in read:
+                        s["repeats"][p] += 1
+                    read.add(p)
+            u = m.get("usage")
+            if not u or m.get("id") in seen or m.get("model") == "<synthetic>":
+                continue
+            seen.add(m.get("id"))
+            cc = u.get("cache_creation") or {}
+            c = dict(inp=u.get("input_tokens", 0), cr=u.get("cache_read_input_tokens", 0),
+                     cw1=cc.get("ephemeral_1h_input_tokens", 0),
+                     cw5=cc.get("ephemeral_5m_input_tokens", 0) if cc else u.get("cache_creation_input_tokens", 0),
+                     out=u.get("output_tokens", 0))
+            s["turns"].append(dict(t=epoch(d["timestamp"]), model=m.get("model"), c=c))
+            s["after"] += 1
+    return s
+
+
+def misses(turns):
+    """Cache rebuilds after the first turn (cache write >20k and larger than the cache read), by cause."""
+    out = []
+    for a, b in zip(turns, turns[1:]):
+        cw = b["c"]["cw1"] + b["c"]["cw5"]
+        if cw > 20000 and cw > b["c"]["cr"]:
+            gap = b["t"] - a["t"]
+            cause = ("model switch" if b["model"] != a["model"] else "idle >1h" if gap > 3600
+                     else "idle 5-60m" if gap > 300 else "other")
+            out.append((cause, cw))
+    return out
+
+
+def load(days):
+    # shortcut: a session active in the window counts whole (its cost-state is a lifetime total);
+    # split by turn timestamps if multi-week sessions make weekly numbers misleading.
+    cut = time.time() - days * 86400
+    sessions = []
+    for f in sorted((HOME / ".claude" / "projects").glob("*/*.jsonl")):
+        subfiles = sorted(f.with_suffix("").glob("subagents/agent-*.jsonl"))
+        if max(p.stat().st_mtime for p in [f, *subfiles]) < cut:
+            continue
+        s = parse(f)
+        cs = s["cost_state"]
+        s.update(id=f.stem, project=project_label(f.parent.name),
+                 cost=cs.get("totalCostUSD") if cs and not s["after"] else None,
+                 models={k: v.get("costUSD", 0) for k, v in (cs or {}).get("modelUsage", {}).items()}
+                 if s["after"] == 0 else {}, subs=[])
+        for p in subfiles:
+            a = parse(p)
+            meta = p.with_name(p.name.removesuffix(".jsonl") + ".meta.json")
+            try:
+                a.update(json.loads(meta.read_text()))
+            except (OSError, ValueError):
+                pass
+            a["model"] = collections.Counter(t["model"] for t in a["turns"]).most_common(1)[0][0] if a["turns"] else None
+            s["subs"].append(a)
+        total = sum(weight(t["c"]) for x in [s, *s["subs"]] for t in x["turns"])
+        s["per_unit"] = s["cost"] / total if s["cost"] and total else 0  # dollars per weighted token
+        sessions.append(s)
+    return sessions
+
+
+def codex(days):
+    """Codex token totals by cwd: the last token_count event of each session file."""
+    cut, by = time.time() - days * 86400, collections.defaultdict(collections.Counter)
+    for f in (HOME / ".codex" / "sessions").glob("**/*.jsonl"):
+        if f.stat().st_mtime < cut:
+            continue
+        cwd, total = "?", None
+        for d in jsonl(f):
+            p = d.get("payload") or {}
+            if d.get("type") == "session_meta":
+                cwd = p.get("cwd") or cwd
+            elif p.get("type") == "token_count" and p.get("info"):
+                total = p["info"].get("total_token_usage")
+        if total:
+            path = Path(cwd)
+            label = "~" if path == HOME else str(path.relative_to(HOME)) if path.is_relative_to(HOME) else cwd
+            by[label].update(sessions=1, **{k: total.get(k, 0) for k in ("input_tokens", "cached_input_tokens", "output_tokens")})
+    return by
+
+
+def money(x):
+    return f"${x:,.2f}"
+
+
+def mtok(x):
+    return f"{x / 1e6:.1f}M"
+
+
+def cell(x):
+    return str(x or "").replace("|", "\\|")
+
+
+def table(head, rows):
+    return [f"| {' | '.join(head)} |", "|" + "---|" * len(head)] + [f"| {' | '.join(cell(c) for c in r)} |" for r in rows]
+
+
+def by_key(sessions, by):
+    out = collections.Counter()
+    for s in sessions:
+        if by == "model":
+            out.update(s["models"])
+        elif s["cost"] is not None:
+            out[s["project"] if by == "project" else f"{s['project']}: {s['title'] or s['id'][:8]}"] += s["cost"]
+    return out
+
+
+def top(args):
+    sessions = load(args.days)
+    totals = by_key(sessions, args.by)
+    grand = sum(totals.values()) or 1
+    print(f"last {args.days} days, by {args.by}: {money(grand)}")
+    for name, x in totals.most_common(15):
+        print(f"{money(x):>11} {x / grand:4.0%}  {name}")
+    missing = sum(s["cost"] is None for s in sessions)
+    if missing:
+        print(f"{missing} sessions with no cost record (still running or never exited)")
+
+
+def report(args):
+    now = dt.datetime.now()
+    sessions = load(args.days)
+    priced = [s for s in sessions if s["cost"] is not None]
+    total = sum(s["cost"] for s in priced) or 1
+    toks = collections.Counter()
+    for s in sessions:
+        for x in [s, *s["subs"]]:
+            for t in x["turns"]:
+                toks.update(t["c"])
+    nsubs = sum(len(s["subs"]) for s in sessions)
+    nturns = sum(len(x["turns"]) for s in sessions for x in [s, *s["subs"]])
+    out = [f"# Claude usage {week_file(now)[:-3]}", "",
+           f"Last {args.days} days to {now:%Y-%m-%d %H:%M}. Dollars from Claude Code cost-state records; "
+           "finer splits by price-weighted token share.", "", "## Totals", "",
+           f"- {money(total)} across {len(priced)} sessions ({len(sessions) - len(priced)} with no cost record), "
+           f"{nsubs} subagents, {nturns} turns.",
+           f"- Tokens: input {mtok(toks['inp'])}, cache read {mtok(toks['cr'])}, cache write 5m {mtok(toks['cw5'])} "
+           f"/ 1h {mtok(toks['cw1'])}, output {mtok(toks['out'])}.", "", "## By project", ""]
+    counts = collections.Counter(s["project"] for s in priced)
+    out += table(["project", "sessions", "$", "share"],
+                 [(p, counts[p], money(x), f"{x / total:.0%}") for p, x in by_key(priced, "project").most_common()])
+
+    out += ["", "## Top sessions", ""]
+    out += table(["$", "project", "title", "first prompt", "turns", "max ctx"],
+                 [(money(s["cost"]), s["project"], s["title"] or s["id"][:8], s["first"], len(s["turns"]),
+                   f"{max((ctx(t['c']) for t in s['turns']), default=0) / 1e3:.0f}k")
+                  for s in sorted(priced, key=lambda s: -s["cost"])[:10]])
+
+    bands, subcost, opus = collections.Counter(), 0, []
+    for s in priced:
+        for x in [s, *s["subs"]]:
+            for t in x["turns"]:
+                d = s["per_unit"] * weight(t["c"])
+                bands[">250k"] += d if ctx(t["c"]) > 250e3 else 0
+                bands[">400k"] += d if ctx(t["c"]) > 400e3 else 0
+        for a in s["subs"]:
+            d = s["per_unit"] * sum(weight(t["c"]) for t in a["turns"])
+            subcost += d
+            if "opus" in (a["model"] or ""):
+                opus.append((d, s["project"], a.get("agentType"), a.get("description") or a["first"], len(a["turns"])))
+    out += ["", "## Context size", "",
+            f"- {bands['>250k'] / total:.0%} of dollars came from turns above 250k context, "
+            f"{bands['>400k'] / total:.0%} above 400k (main sessions and subagents)."]
+
+    rebuilds = collections.defaultdict(collections.Counter)
+    for s in sessions:
+        for kind, x in [("main", s)] + [("sub", a) for a in s["subs"]]:
+            for cause, cw in misses(x["turns"]):
+                rebuilds[cause].update({kind: 1, kind + " tok": cw})
+    out += ["", "## Cache rebuilds", ""]
+    out += table(["cause", "main", "main tokens", "subagent", "subagent tokens"],
+                 [(c, r["main"], mtok(r["main tok"]), r["sub"], mtok(r["sub tok"]))
+                  for c in ("idle >1h", "idle 5-60m", "model switch", "other") for r in [rebuilds[c]]])
+
+    out += ["", "## Models and subagents", ""]
+    models = by_key(priced, "model")
+    mtotal = sum(models.values()) or 1
+    out += table(["model", "$", "share"], [(m, money(x), f"{x / mtotal:.0%}") for m, x in models.most_common()])
+    out += ["", f"Subagents: {subcost / total:.0%} of dollars. Opus subagents: {len(opus)}.", ""]
+    if opus:
+        out += table(["$", "project", "type", "description", "turns"], [(money(r[0]), *r[1:]) for r in sorted(opus, key=lambda r: -r[0])])
+
+    repeats = collections.Counter()
+    for s in sessions:
+        for x in [s, *s["subs"]]:
+            repeats.update(x["repeats"])
+    main_rep = sum(sum(s["repeats"].values()) for s in sessions)
+    out += ["", "## Repeat reads", "",
+            f"- {sum(repeats.values())} reads of a file already read in the same transcript "
+            f"({main_rep} in main sessions)."]
+    out += [f"- {n}x `{p}`" for p, n in repeats.most_common(5)]
+
+    comp = collections.Counter()
+    for s in sessions:
+        for trig, gap in s["compactions"]:
+            comp["idle" if trig == "auto" and gap > IDLE_COMPACT_GAP else trig] += 1
+    out += ["", "## Compactions (main sessions)", "",
+            f"- idle (auto, >30 min after the last turn): {comp['idle']}; other auto: {comp['auto']}; "
+            f"manual: {comp['manual']}."]
+
+    missing = [s for s in sessions if s["cost"] is None]
+    if missing:
+        out += ["", "## No cost record", "", "Still running or never exited; not estimated.", ""]
+        out += table(["session", "project", "title", "turns"],
+                     [(s["id"][:8], s["project"], s["title"], len(s["turns"])) for s in missing])
+
+    cx = codex(args.days)
+    out += ["", "## Codex (tokens only)", ""]
+    out += table(["project", "sessions", "input", "cached input", "output"],
+                 [(p, c["sessions"], mtok(c["input_tokens"]), mtok(c["cached_input_tokens"]), mtok(c["output_tokens"]))
+                  for p, c in sorted(cx.items(), key=lambda kv: -kv[1]["input_tokens"])]) if cx else ["No Codex sessions."]
+
+    args.out.mkdir(parents=True, exist_ok=True)
+    path = args.out / week_file(now)
+    path.write_text("\n".join(out) + "\n", encoding="utf-8")
+    print(path)
+
+
+def main(argv=None):
+    ap = argparse.ArgumentParser(prog="claude-usage", description=__doc__.split("\n")[0])
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    t = sub.add_parser("top", help="biggest spenders, short table")
+    t.add_argument("--days", type=int, default=30)
+    t.add_argument("--by", choices=["project", "session", "model"], default="project")
+    t.set_defaults(fn=top)
+    r = sub.add_parser("report", help="write the weekly markdown report")
+    r.add_argument("--days", type=int, default=7)
+    r.add_argument("--out", type=Path, default=HOME / ".local" / "state" / "claude-usage")
+    r.set_defaults(fn=report)
+    args = ap.parse_args(argv)
+    args.fn(args)
+
+
+if __name__ == "__main__":
+    main()

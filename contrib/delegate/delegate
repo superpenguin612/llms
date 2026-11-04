@@ -124,8 +124,8 @@ def sandbox(workdir, run, key, argv, repo=None):
             hide += ["--ro-bind", str(empty), str(p)]
     bwrap = shutil.which("bwrap") or die("bwrap not found (apt install bubblewrap)")
     binds = []  # /tmp is private, so bind back what the worker needs from under it (mounts apply in order)
-    # The repo too: a worktree's .git points into it.
-    for p in dict.fromkeys(Path(x) for x in (workdir, run, repo) if x):
+    # The repo too (a worktree's .git points into it), and HERE (pi reads the rules files from it).
+    for p in dict.fromkeys(Path(x) for x in (workdir, run, repo, HERE) if x):
         if Path("/tmp") == p or Path("/tmp") in p.parents:
             binds += ["--bind", str(p), str(p)]
     return ["env", "-i", *env, bwrap, "--dev-bind", "/", "/", "--proc", "/proc", *hide,

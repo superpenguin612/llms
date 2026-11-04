@@ -1,5 +1,5 @@
 #!/bin/sh
-# Claude Code PreToolUse (Agent): subagents run on Haiku at xhigh, Sonnet or Opus (global AGENTS.md, "Delegate bulk work").
+# Claude Code PreToolUse (Agent): subagents run on Haiku at xhigh, Sonnet or Opus (global AGENTS.md, "Which model does what", "Delegate procedure").
 # A spawn that needs another model says why in its prompt: "[not-sonnet: <reason>]".
 # shortcut: doesn't see agents spawned inside Workflow scripts; add a check there if those get used.
 in=$(cat)

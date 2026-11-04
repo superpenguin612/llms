@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""delegate: run a cheap pi worker (OpenCode Go) on a brief, in its own git worktree.
+"""delegate: run a cheap pi worker (OpenCode Go) on a brief, in its own git worktree and a sandbox.
 
   delegate run    --repo PATH --task NAME --brief FILE [--chain implementation|bulk] [--timeout 45m]
   delegate status [TASK]
@@ -25,6 +25,10 @@ DATA = Path.home() / ".local/share/delegate"
 RUNS = DATA / "runs"
 LOG = DATA / "runs.jsonl"
 MAX_LIVE = 3
+# The worker's environment starts empty plus these (if set), the Go key and DELEGATE_RUN.
+ALLOW = ("PATH", "HOME", "USER", "LANG", "TERM", "SHELL", "TMPDIR")
+# Credentials hidden from the worker, relative to ~. A new credential location must be added here.
+HIDE = ("creds", ".ssh", ".claude/.credentials.json", ".codex/auth.json", ".config/gh", ".pi/agent/auth.json")
 
 
 def die(msg):
@@ -68,6 +72,39 @@ def save(rec):
         f.write("\n".join(lines) + "\n")
 
 
+def go_key():
+    f = Path.home() / "creds/opencode-go.env"
+    for line in f.read_text().splitlines() if f.exists() else []:
+        k, _, v = line.removeprefix("export ").partition("=")
+        if k.strip() == "OPENCODE_API_KEY":
+            return v.strip().strip("'\"")
+    die(f"no OPENCODE_API_KEY in {f}")
+
+
+def sandbox(workdir, run, key, argv):
+    """argv under bubblewrap: empty environment plus ALLOW, credentials in HIDE hidden
+    (dirs as empty tmpfs, files as an empty read-only file), own PID namespace so a timeout
+    kills everything the worker started."""
+    env = [f"{k}={os.environ[k]}" for k in ALLOW if k in os.environ]
+    env += [f"OPENCODE_API_KEY={key}", f"DELEGATE_RUN={run}",
+            # ~/.ssh is hidden, so commits can't be SSH-signed: worker commits are unsigned.
+            "GIT_CONFIG_COUNT=1", "GIT_CONFIG_KEY_0=commit.gpgsign", "GIT_CONFIG_VALUE_0=false"]
+    empty = DATA / "empty"
+    if not empty.exists():
+        DATA.mkdir(parents=True, exist_ok=True)
+        empty.touch(0o444)
+    hide = []
+    for rel in HIDE:
+        p = Path.home() / rel
+        if p.is_dir():
+            hide += ["--tmpfs", str(p)]
+        elif p.exists():
+            hide += ["--ro-bind", str(empty), str(p)]
+    bwrap = shutil.which("bwrap") or die("bwrap not found (apt install bubblewrap)")
+    return ["env", "-i", *env, bwrap, "--dev-bind", "/", "/", "--proc", "/proc", *hide,
+            "--unshare-pid", "--die-with-parent", "--chdir", str(workdir), "--", *argv]
+
+
 def usage(session, skip=0):
     """Token and cost sums of the assistant messages in a pi session log (after `skip` lines),
     and the last message's stopReason."""
@@ -87,7 +124,7 @@ def usage(session, skip=0):
     return tot, stop
 
 
-def attempt(rec, model, workdir, message):
+def attempt(rec, model, workdir, message, key):
     run = Path(rec["run"])
     sessions = run / "sessions"
     before = set(sessions.glob("*.jsonl"))
@@ -98,8 +135,7 @@ def attempt(rec, model, workdir, message):
     with open(run / "pi.log", "a") as log:
         log.write(f"=== {model} {time.strftime('%Y-%m-%dT%H:%M:%S')}\n")
         log.flush()
-        rc = subprocess.run(["timeout", "--kill-after=30", rec["timeout"], *argv], cwd=workdir,
-                            env={**os.environ, "DELEGATE_RUN": str(run)},
+        rc = subprocess.run(["timeout", "--kill-after=30", rec["timeout"], *sandbox(workdir, run, key, argv)],
                             stdout=log, stderr=subprocess.STDOUT).returncode
     new = sorted(set(sessions.glob("*.jsonl")) - before)
     session = str(new[-1]) if new else None
@@ -144,6 +180,7 @@ def cmd_run(a):
     if len(live) >= MAX_LIVE:
         die(f"{MAX_LIVE} runs are already live ({', '.join(m.parent.name for m in live)}); wait for one")
     brief = Path(a.brief).read_text()
+    key = go_key()
     repo = Path(git(a.repo, "rev-parse", "--show-toplevel"))
     wt = DATA / "worktrees" / repo.name / a.task
     rec = {"task": a.task, "repo": str(repo), "mode": "worktree", "chain": a.chain, "timeout": a.timeout,
@@ -158,7 +195,7 @@ def cmd_run(a):
     marker.write_text(str(os.getpid()))
     save(rec)
     try:
-        rec["attempts"].append(attempt(rec, chain[0], wt, brief))
+        rec["attempts"].append(attempt(rec, chain[0], wt, brief, key))
         rec["status"] = rec["attempts"][-1]["outcome"]
         save(rec)
     finally:

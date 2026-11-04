@@ -62,6 +62,7 @@ def sh(cwd, *args, env):
     return subprocess.run(args, cwd=cwd, env=env, check=True, capture_output=True, text=True).stdout.strip()
 
 
+@unittest.skipUnless(shutil.which("bwrap"), "needs bubblewrap")
 class DelegateBase(unittest.TestCase):
     def setUp(self):
         td = tempfile.TemporaryDirectory()
@@ -208,6 +209,65 @@ class TestRun(DelegateBase):
         chains = json.loads((SRC / "chains.json").read_text())
         self.assertEqual(chains["implementation"], ["deepseek-v4.1-flash", "kimi-k2.7-code"])
         self.assertEqual(chains["bulk"], [])
+
+
+class TestSandbox(DelegateBase):
+    def test_worker_sees_allowlisted_env_and_no_credentials(self):
+        self.chains(implementation=["probe"])
+        (self.home / ".codex").mkdir()
+        (self.home / ".codex/auth.json").write_text("secret")
+        (self.home / "creds" / "other").write_text("secret")
+        self.env["SSH_AUTH_SOCK"] = "/tmp/agent.sock"
+        self.env["GH_TOKEN"] = "secret"
+        p = self.run_task("t1")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        probe = json.loads((self.data / "runs/t1/probe.json").read_text())
+        allowed = {"PATH", "HOME", "LANG", "OPENCODE_API_KEY", "DELEGATE_RUN",
+                   "GIT_CONFIG_COUNT", "GIT_CONFIG_KEY_0", "GIT_CONFIG_VALUE_0"}
+        self.assertLessEqual(set(probe["env"]) - {"PWD", "SHLVL", "_", "LC_CTYPE"}, allowed)
+        self.assertEqual(probe["env"]["OPENCODE_API_KEY"], "fake-key")
+        self.assertEqual(probe["creds"], [])
+        self.assertEqual(probe["codex"], "")
+
+    def test_missing_key_errors(self):
+        self.chains(implementation=["ok-a"])
+        (self.home / "creds" / "opencode-go.env").unlink()
+        p = self.run_task("t1")
+        self.assertIn("OPENCODE_API_KEY", p.stderr)
+        self.assertFalse((self.data / "worktrees").exists())
+
+
+@unittest.skipUnless(shutil.which("bwrap") and (Path.home() / "creds/opencode-go.env").exists(),
+                     "needs bubblewrap and this machine's ~/creds")
+class TestRealHomeSandbox(unittest.TestCase):
+    """The sandbox against this machine's real home: credentials hidden, commits still work."""
+
+    def test_real_credentials_hidden(self):
+        from importlib.machinery import SourceFileLoader
+        import importlib.util
+        loader = SourceFileLoader("delegate_mod", str(SRC / "delegate"))
+        mod = importlib.util.module_from_spec(importlib.util.spec_from_loader("delegate_mod", loader))
+        loader.exec_module(mod)
+        home = Path.home()
+        with tempfile.TemporaryDirectory() as td:
+            mod.DATA = Path(td) / "data"
+            script = textwrap.dedent(f"""\
+                set -e
+                for d in ~/creds ~/.ssh ~/.config/gh; do [ ! -e "$d" ] || ls -A "$d" | wc -l; done
+                for f in ~/.claude/.credentials.json ~/.codex/auth.json ~/.pi/agent/auth.json; do
+                    [ ! -e "$f" ] || wc -c < "$f"; done
+                echo ENV; env | cut -d= -f1 | sort
+                cd {td} && git init -q r && cd r && git commit -q --allow-empty -m "test: sandbox" && echo COMMIT
+                """)
+            p = subprocess.run(mod.sandbox(td, td, "k", ["sh", "-c", script]), capture_output=True, text=True)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        files, _, rest = p.stdout.partition("ENV\n")
+        self.assertEqual(set(files.split()), {"0"})  # hidden dirs list empty, hidden files read empty
+        names = set(rest.split()) - {"COMMIT", "PWD", "SHLVL", "_"}
+        self.assertLessEqual(names, set(mod.ALLOW) | {"OPENCODE_API_KEY", "DELEGATE_RUN", "GIT_CONFIG_COUNT",
+                                                      "GIT_CONFIG_KEY_0", "GIT_CONFIG_VALUE_0"})
+        self.assertIn("COMMIT", rest)  # commit works without the hidden signing key
+        self.assertTrue((home / "creds").exists())
 
 
 if __name__ == "__main__":

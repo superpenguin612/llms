@@ -38,7 +38,10 @@ Runs a cheap OpenCode Go model through pi as an unattended worker: one git workt
 (`delegate/<task>`) per task, a brief in, commits and a `result.md` out. Model chains are in
 `delegate/chains.json`; the worker's extra instructions in `delegate/worker-rules.md`. Every run
 is one JSON line in `~/.local/share/delegate/runs.jsonl`. At most 3 runs are live at once.
-Python 3 stdlib only; needs `pi` on PATH.
+The worker runs under bubblewrap with an empty environment plus a short allowlist, and with
+`~/creds`, `~/.ssh` and other login files hidden (see `HIDE` in the script); its commits are
+unsigned. The Go key is read from `~/creds/opencode-go.env`. Python 3 stdlib only; needs `pi`
+and `bwrap` on PATH.
 
 ```sh
 ln -sf "$PWD/delegate/delegate" ~/.local/bin/delegate

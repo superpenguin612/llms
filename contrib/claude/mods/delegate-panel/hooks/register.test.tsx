@@ -164,7 +164,8 @@ for (const surface of ['terminal', 'desktop'] as const) {
     expect((await ui.find({ key: 'end' }))?.text).toBe('↓ jump to end (e)')
     // The kit has no scroller, so the plugin's scroll rejects; that it was asked shows on the status line.
     expect(statuses).toEqual(['delegate: jump to end failed: HooksError: no implementation for ui.scroll'])
-    expect(await ui.find({ type: 'Text', text: /^following · attempt 6 tok/ })).toBeDefined()
+    // The state and token line show at the top and again in the bottom status line.
+    expect((await ui.findAll({ type: 'Text', text: /^following · attempt 6 tok/ })).length).toBe(2)
     // result.md in full at the end.
     expect(await ui.find({ type: 'Text', text: 'result.md' })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: /## Status\ndone\n\n## Summary\nAdded hello/ })).toBeDefined()

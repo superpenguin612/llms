@@ -339,7 +339,17 @@ export const register: Register = on => {
             <Text>{row.resultMd.trim()}</Text>
           </Box>
         )}
-        {/* Following keeps the view at its end, so the way back is repeated here. */}
+        {/* Following keeps the view at its end, so its state and the way back are repeated here. */}
+        <Box key="status-end" flexDirection="column" marginTop={1}>
+          <Text dimColor>{'─'.repeat(40)}</Text>
+          <Text>
+            {state(row)}
+            <Text dimColor>{row.live ? ` · ${ago(row.act.idle)}` : ''}</Text>
+          </Text>
+          <Text dimColor>
+            {isFollowing ? 'following' : 'paused'} · attempt {tokLine(usage ?? sum([]))} · run {tokLine(row.total)}
+          </Text>
+        </Box>
         <Box flexDirection="row" gap={2}>
           <Button key="back-end" onPress={back}>
             ← all runs (b)

@@ -475,6 +475,11 @@ class TestSandboxArgv(unittest.TestCase):
         self.assertEqual(argv[i + 2:i + 8], ["--bind", "/tmp/delegate/work", "/tmp/delegate/work",
                                             "--bind", "/tmp/delegate/run", "/tmp/delegate/run"])
 
+    def test_repo_under_tmp_is_bound_for_a_worktree(self):
+        argv = self.mod.sandbox("/work", "/runs", "k", ["true"], repo="/tmp/demo")
+        i = next(i for i, x in enumerate(argv) if x == "--tmpfs" and argv[i + 1] == "/tmp")
+        self.assertEqual(argv[i + 2:i + 5], ["--bind", "/tmp/demo", "/tmp/demo"])
+
     def test_no_binds_when_nothing_is_under_tmp(self):
         argv = self.mod.sandbox("/work", "/runs", "k", ["true"])
         i = next(i for i, x in enumerate(argv) if x == "--tmpfs" and argv[i + 1] == "/tmp")

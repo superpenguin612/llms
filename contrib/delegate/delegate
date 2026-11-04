@@ -103,7 +103,7 @@ def go_key():
     die(f"no OPENCODE_API_KEY in {f}")
 
 
-def sandbox(workdir, run, key, argv):
+def sandbox(workdir, run, key, argv, repo=None):
     """argv under bubblewrap: empty environment plus ALLOW, credentials in HIDE hidden
     (dirs as empty tmpfs, files as an empty read-only file), a private /tmp so a worker can't
     write outside its directory, own PID namespace so a timeout kills everything it started."""
@@ -124,7 +124,8 @@ def sandbox(workdir, run, key, argv):
             hide += ["--ro-bind", str(empty), str(p)]
     bwrap = shutil.which("bwrap") or die("bwrap not found (apt install bubblewrap)")
     binds = []  # /tmp is private, so bind back what the worker needs from under it (mounts apply in order)
-    for p in (Path(workdir), Path(run)):
+    # The repo too: a worktree's .git points into it.
+    for p in dict.fromkeys(Path(x) for x in (workdir, run, repo) if x):
         if Path("/tmp") == p or Path("/tmp") in p.parents:
             binds += ["--bind", str(p), str(p)]
     return ["env", "-i", *env, bwrap, "--dev-bind", "/", "/", "--proc", "/proc", *hide,
@@ -177,7 +178,7 @@ def attempt(rec, model, message, key, session=None):
         log.write(f"=== {model} {time.strftime('%Y-%m-%dT%H:%M:%S')}\n")
         log.flush()
         p = subprocess.Popen(["timeout", f"--kill-after={KILL_AFTER}", rec["timeout"],
-                              *sandbox(workdir, run, key, argv)],
+                              *sandbox(workdir, run, key, argv, rec["repo"])],
                              stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT)
         while p.poll() is None and STOP is None:
             time.sleep(0.1)

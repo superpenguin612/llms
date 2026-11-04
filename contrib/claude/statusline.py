@@ -97,8 +97,9 @@ def _scan(path, st):
             st["usage"], st["ts"] = u, d.get("timestamp")
     return st
 
-def last_turn(data):
-    """(usage, unix time) of the session's last reply, or None."""
+def last_turn(data, usd):
+    """(usage, unix time) of the session's last reply, or None. Saves the live cost for claude-usage,
+    since Claude Code records a session's cost only when it exits."""
     tp = data.get("transcript_path")
     if not isinstance(tp, str) or not os.path.exists(tp):
         return None
@@ -108,6 +109,8 @@ def last_turn(data):
     except Exception:
         st = {}
     st = _scan(tp, st)
+    if usd is not None:
+        st["cost"] = usd
     try:
         os.makedirs(CACHE_DIR, exist_ok=True)
         json.dump(st, open(key + ".tmp", "w"))
@@ -163,8 +166,10 @@ def main():
     if name:
         parts.append(fg(PURPLE, name + (" " + level if isinstance(level, str) else "")))
 
+    cost = data.get("cost")
+    usd = num(cost.get("total_cost_usd")) if isinstance(cost, dict) else None
     try:
-        turn = last_turn(data)
+        turn = last_turn(data, usd)
     except Exception:
         turn = None
     if turn:
@@ -179,8 +184,6 @@ def main():
             seg += " " + fg(DIM, "(") + g + fg(DIM, ")")
         parts.append(seg)
 
-    cost = data.get("cost")
-    usd = num(cost.get("total_cost_usd")) if isinstance(cost, dict) else None
     if usd is not None:
         parts.append("$%.2f" % usd)
 

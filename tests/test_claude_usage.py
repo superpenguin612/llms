@@ -77,6 +77,10 @@ class TestClaudeUsage(unittest.TestCase):
         write(self.proj / "s3.jsonl", [cost(9.0), *turn("c", "2026-11-02T10:00:00Z")])  # still running
         got = {s["id"]: s["cost"] for s in cu.load(30)}
         self.assertEqual(got, {"s1": 2.5, "s2": None, "s3": None})
+        (self.home / ".cache" / "claude-statusline").mkdir(parents=True)
+        (self.home / ".cache" / "claude-statusline" / "s3.json").write_text('{"cost": 4.0}')  # saved by the status line
+        got = {s["id"]: s["cost"] for s in cu.load(30)}
+        self.assertEqual(got, {"s1": 2.5, "s2": None, "s3": 4.0})
 
     def test_miss_classification(self):
         def t(sec, model="a", cw=50000, cr=1000):

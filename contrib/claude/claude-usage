@@ -7,7 +7,8 @@
 Reads ~/.claude/projects/<project>/<session>.jsonl, their subagents/agent-*.jsonl, and
 ~/.codex/sessions/**/*.jsonl. Dollars come from each session's last `cost-state` record
 (written when Claude Code exits; it includes subagent spend). A session with none, or with
-turns after its last one (still running), is listed as "no cost record", never estimated.
+turns after its last one (still running), uses the live cost the status line saved; with neither it is
+listed as "no cost record", never estimated.
 Finer breakdowns (per subagent, per context size) split a session's dollars by
 price-weighted token share.
 """
@@ -112,6 +113,14 @@ def misses(turns):
     return out
 
 
+def live_cost(session_id):
+    """Claude Code's running cost for a session that hasn't exited, as saved by the status line."""
+    try:
+        return json.loads((HOME / ".cache" / "claude-statusline" / f"{session_id}.json").read_text()).get("cost")
+    except (OSError, ValueError):
+        return None
+
+
 def load(days):
     # shortcut: a session active in the window counts whole (its cost-state is a lifetime total);
     # split by turn timestamps if multi-week sessions make weekly numbers misleading.
@@ -124,7 +133,7 @@ def load(days):
         s = parse(f)
         cs = s["cost_state"]
         s.update(id=f.stem, project=project_label(f.parent.name),
-                 cost=cs.get("totalCostUSD") if cs and not s["after"] else None,
+                 cost=cs.get("totalCostUSD") if cs and not s["after"] else live_cost(f.stem),
                  models={k: v.get("costUSD", 0) for k, v in (cs or {}).get("modelUsage", {}).items()}
                  if s["after"] == 0 else {}, subs=[])
         for p in subfiles:

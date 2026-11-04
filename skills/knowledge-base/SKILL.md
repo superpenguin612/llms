@@ -46,7 +46,7 @@ A **vault** is a folder with `kb.yaml` (its profile). It is also an Obsidian vau
 - Give each worker a disjoint set of record ids, and where several share one vault, its own inbox subtree (`kb triage scan inbox/<who>/<batch>`).
 - The brief lists the ids; the procedures to read (this `SKILL.md`, [capture.md](references/capture.md) "Mine (your part)" and "Quoting rules", [writing.md](references/writing.md), the vault's `kb.yaml` and `README.md`, `kb guide`); the limits (touch only its own records and new entity stubs, no `kb build`, no `kb capture` unless the brief is a capture task, check an id is free before capturing it); and the acceptance command `kb lint --detailed 2>&1 | grep -E '<its ids joined by |>'`, which must print nothing.
 - It also says, overriding the worker rules' commit step, that workers sharing a vault must not commit: parallel commits in one checkout race on git's index lock. You review each `result.md` and its records, run `kb build` and `kb lint`, commit, then `delegate clean <task>`. Reject a worker with one `delegate retry` and written feedback; after that, mine the record yourself.
-- Where `delegate` isn't installed, fall back to subagents on a small, fast model at high effort.
+- Where `delegate` isn't installed, fall back to subagents on a small, fast model at its highest effort setting.
 
 ## Setting up a new vault
 

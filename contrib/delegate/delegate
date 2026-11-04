@@ -245,15 +245,15 @@ def cmd_run(a):
     run.mkdir(parents=True)  # claims the task name
     try:
         claim(run)
-    except SystemExit:
-        shutil.rmtree(run)
-        raise
-    try:
         if wt := rec["worktree"]:
             git(rec["repo"], "worktree", "add", "-q", "-b", rec["branch"], wt, "HEAD")
         (run / "sessions").mkdir()
         (run / "brief.md").write_text(brief)
         save(rec)
+    except BaseException:  # a failed start leaves nothing behind, so the name stays usable
+        shutil.rmtree(run, ignore_errors=True)
+        raise
+    try:
         for i, model in enumerate(chain):
             if STOP is not None:  # stopped between attempts
                 break

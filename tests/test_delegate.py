@@ -242,6 +242,16 @@ class TestRun(DelegateBase):
         self.assertEqual(chains["implementation"], ["deepseek-v4.1-flash", "kimi-k2.7-code"])
         self.assertEqual(chains["bulk"], ["glm-5.3-flash"])
 
+    def test_failed_start_leaves_nothing_behind(self):
+        self.chains(implementation=["ok-a"])
+        self.git("branch", "delegate/t1")  # makes git worktree add -b fail
+        p = self.run_task("t1")
+        self.assertNotEqual(p.returncode, 0)
+        self.assertIn("worktree add", p.stderr)
+        self.assertFalse((self.data / "runs" / "t1").exists())
+        self.git("branch", "-D", "delegate/t1")
+        self.assertEqual(self.run_task("t1").returncode, 0)  # the name can be used again
+
 
 class TestFallback(DelegateBase):
     def outcomes(self, task):

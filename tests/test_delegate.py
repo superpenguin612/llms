@@ -443,10 +443,11 @@ class TestSandbox(DelegateBase):
         p = self.run_task("t1")
         self.assertEqual(p.returncode, 0, p.stderr)
         probe = json.loads((self.data / "runs/t1/probe.json").read_text())
-        allowed = {"PATH", "HOME", "LANG", "OPENCODE_API_KEY", "DELEGATE_RUN",
+        allowed = {"PATH", "HOME", "LANG", "OPENCODE_API_KEY", "DELEGATE_RUN", "TMPDIR",
                    "GIT_CONFIG_COUNT", "GIT_CONFIG_KEY_0", "GIT_CONFIG_VALUE_0"}
         self.assertLessEqual(set(probe["env"]) - {"PWD", "SHLVL", "_", "LC_CTYPE"}, allowed)
         self.assertEqual(probe["env"]["OPENCODE_API_KEY"], "fake-key")
+        self.assertEqual(probe["env"]["TMPDIR"], "/tmp")  # the private /tmp, never the host's TMPDIR
         self.assertEqual(probe["creds"], [])
         self.assertEqual(probe["codex"], "")
 
@@ -504,7 +505,7 @@ class TestRealHomeSandbox(unittest.TestCase):
         files, _, rest = p.stdout.partition("ENV\n")
         self.assertEqual(set(files.split()), {"0"})  # hidden dirs list empty, hidden files read empty
         names = set(rest.split()) - {"COMMIT", "PWD", "SHLVL", "_"}
-        self.assertLessEqual(names, set(mod.ALLOW) | {"OPENCODE_API_KEY", "DELEGATE_RUN", "GIT_CONFIG_COUNT",
+        self.assertLessEqual(names, set(mod.ALLOW) | {"OPENCODE_API_KEY", "DELEGATE_RUN", "TMPDIR", "GIT_CONFIG_COUNT",
                                                       "GIT_CONFIG_KEY_0", "GIT_CONFIG_VALUE_0"})
         self.assertIn("COMMIT", rest)  # commit works without the hidden signing key
         self.assertTrue((home / "creds").exists())

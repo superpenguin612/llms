@@ -239,7 +239,10 @@ def cmd_run(a):
     else:
         repo = Path(git(a.repo, "rev-parse", "--show-toplevel"))
         wt = DATA / "worktrees" / repo.name / a.task
-        rec |= {"repo": str(repo), "base_branch": git(repo, "rev-parse", "--abbrev-ref", "HEAD"),
+        base_branch = git(repo, "rev-parse", "--abbrev-ref", "HEAD")
+        if base_branch == "HEAD":  # detached: `clean` could not tell whether a branch was merged
+            die(f"{repo} has a detached HEAD; check out a branch before delegating")
+        rec |= {"repo": str(repo), "base_branch": base_branch,
                 "base_commit": git(repo, "rev-parse", "HEAD"), "branch": f"delegate/{a.task}",
                 "worktree": str(wt)}
     run.mkdir(parents=True)  # claims the task name

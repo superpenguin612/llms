@@ -230,6 +230,16 @@ class TestRun(DelegateBase):
         self.assertNotEqual(p.returncode, 0)
         self.assertIn("exists", p.stderr)
 
+    def test_refuses_detached_head(self):
+        self.chains(implementation=["ok-a"])
+        self.git("checkout", "-q", "--detach")
+        p = self.run_task("t1")
+        self.assertNotEqual(p.returncode, 0)
+        self.assertIn("detached HEAD", p.stderr)
+        self.assertIn("check out a branch", p.stderr)
+        self.assertFalse((self.data / "runs" / "t1").exists())
+        self.assertFalse((self.data / "worktrees").exists())
+
     def test_empty_chain_errors(self):
         self.chains(implementation=["ok-a"], bulk=[])
         p = self.run_task("t1", "--chain", "bulk")

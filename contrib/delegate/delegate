@@ -152,6 +152,7 @@ def usage(session, skip=0):
 
 def claim(run):
     """Mark the run live, refusing a 4th concurrent run."""
+    # shortcut: two runs started at the same instant can both pass the cap; add a lock file if runs are ever started by a script.
     live = [m for m in RUNS.glob("*/running") if alive(m)]
     if len(live) >= MAX_LIVE:
         die(f"{MAX_LIVE} runs are already live ({', '.join(m.parent.name for m in live)}); wait for one")

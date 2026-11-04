@@ -1,11 +1,13 @@
 import type { On } from 'claude-code'
 import { expect, test } from 'claude-code/testing'
 
-import { fold, parseSession, pending, segmentOf, type RunRecord, type Segment } from './delegate'
+import { activity, fold, parseSession, pending, segmentOf, sum, type RunRecord, type Segment } from './delegate'
 import { ERROR_SESSION, OK_SESSION } from './fixture'
 
 const R = '/h/.local/share/delegate/runs'
-const NOW = Date.parse('2026-11-04T17:00:00Z')
+const NOW = Date.parse('2026-11-04T16:23:41Z') // 10s after OK_SESSION's first tool calls
+// OK_SESSION cut after the first tool calls: a worker running bash, as a live log reads mid-run.
+const PARTIAL = OK_SESSION.split('\n').slice(0, 5).join('\n') + '\n'
 const usage = { input: 1, output: 2, cache_read: 3, cache_write: 0, cost: 0.001 }
 
 const rec = (task: string, started: string, rest: Partial<RunRecord>): RunRecord => ({
@@ -42,7 +44,7 @@ const FILES: Record<string, string> = {
   [`${R}/live-b/pi.log`]: '=== m1 2026-11-04T11:40:00\n=== m2 2026-11-04T11:41:00\n',
   [`${R}/live-b/brief.md`]: '# Goal\nlive brief\n',
   [`${R}/live-b/sessions/1.jsonl`]: OK_SESSION,
-  [`${R}/live-b/sessions/2.jsonl`]: ERROR_SESSION,
+  [`${R}/live-b/sessions/2.jsonl`]: PARTIAL,
 }
 const DIRS: Record<string, string[]> = { [`${R}/live-b/sessions`]: ['1.jsonl', '2.jsonl'] }
 
@@ -60,7 +62,11 @@ const PANE = {
   },
 } as const
 
+let statuses: string[] = []
+
 const seed = (on: On) => {
+  statuses = []
+  on('ui.status', (_, e) => (statuses.push(e.text ?? ''), { value: undefined }))
   on('env.get', () => ({ value: '/h' }))
   on('clock.now', () => ({ value: NOW }))
   on('fs.read', (_, e) => (e.path in FILES ? { value: FILES[e.path]! } : { deny: 'ENOENT' }))
@@ -108,6 +114,32 @@ test('output past six lines folds', () => {
   expect(fold('a\nb', false).hidden).toBe(0)
 })
 
+test('activity: the running tool, waiting on the model, done, stalled, fell back', () => {
+  const lines = OK_SESSION.split('\n')
+  const seg = (n: number) => parseSession(lines.slice(0, n).join('\n'))[0]!
+  expect(activity(true, 'running', 'm', seg(5), 0, NOW).text).toBe(
+    'running bash: pwd && ls -la && git status --short && git log --oneline -3',
+  )
+  expect(activity(true, 'running', 'm', seg(5), 0, NOW)).toMatchObject({ idle: 9998, stalled: false })
+  expect(activity(true, 'running', 'm', seg(6), 0, NOW).text).toBe('running bash: echo "$DELEGATE_RUN"')
+  expect(activity(true, 'running', 'm', seg(7), 0, NOW).text).toBe('waiting on the model')
+  expect(activity(true, 'running', 'm', seg(8), 0, NOW).text).toBe('done')
+  expect(activity(true, 'running', 'm', undefined, NOW - 5000, NOW)).toMatchObject({ text: 'starting pi', idle: 5000 })
+  const stalled = activity(true, 'fell back', 'm2', seg(7), 0, NOW + 120_000)
+  expect(stalled).toMatchObject({ text: 'fell back to m2 · waiting on the model · stalled', stalled: true, spin: '!' })
+  expect(activity(false, 'timed out', 'm', seg(7), 0, NOW + 120_000)).toMatchObject({ text: 'timed out', stalled: false })
+  // Tool calls carry their elapsed time from the log's timestamps.
+  expect(seg(6).items[1]).toMatchObject({ started: Date.parse('2026-11-04T16:23:31.002Z'), ended: Date.parse('2026-11-04T16:23:31.023Z') })
+})
+
+test('live token sums grow with a partial session', () => {
+  const partial = parseSession(PARTIAL)[0]!.usage
+  expect(partial).toMatchObject({ input: 1977, output: 134, cache_read: 256, cache_write: 0 })
+  const full = parseSession(OK_SESSION)[0]!.usage
+  expect(full).toMatchObject({ input: 2297, output: 216, cache_read: 3072 })
+  expect(sum([usage, partial]).input).toBe(1978)
+})
+
 for (const surface of ['terminal', 'desktop'] as const) {
   test(`the list, a session, its attempts and folding (${surface})`, async ($, on) => {
     seed(on)
@@ -115,12 +147,25 @@ for (const surface of ['terminal', 'desktop'] as const) {
 
     const rows = await ui.findAll({ type: 'Button' })
     expect(rows.map(b => b.key)).toEqual(['open-live-b', 'open-done-a', 'close'])
-    expect((await ui.find({ key: 'open-live-b' }))?.text).toMatch(/live-b fell back m2 · 1m30s/)
+    expect((await ui.find({ key: 'open-live-b' }))?.text).toMatch(/live-b \S fell back to m2 · running bash: pwd .* m2 · 1m30s/)
     expect((await ui.find({ key: 'open-done-a' }))?.text).toMatch(/done-a done deepseek · 48s/)
     expect(await ui.find({ type: 'Text', text: 'Added hello.txt and bye.txt.' })).toBeDefined()
+    // Running tokens and cost per row: live-b's recorded attempt (6) plus its live log so far (2367).
+    expect(await ui.find({ type: 'Text', text: /^2.4k tok \$0\.0014 · last activity 10s ago$/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /^18 tok \$0\.0030$/ })).toBeDefined()
 
     // Opens on the latest attempt: the retry's segment of the shared log.
     await ui.press({ key: 'open-done-a' })
+    // The jump control sits at the top, right under the header, and opening scrolled to the end.
+    const keys = (await ui.findAll({ type: 'Button' })).map(b => b.key)
+    expect(keys.slice(0, 2)).toEqual(['back', 'end'])
+    expect((await ui.find({ key: 'end' }))?.text).toBe('↓ jump to end (e)')
+    // The kit has no scroller, so the plugin's scroll rejects; that it was asked shows on the status line.
+    expect(statuses).toEqual(['delegate: jump to end failed: HooksError: no implementation for ui.scroll'])
+    expect(await ui.find({ type: 'Text', text: /^following · attempt 6 tok/ })).toBeDefined()
+    // result.md in full at the end.
+    expect(await ui.find({ type: 'Text', text: 'result.md' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /## Status\ndone\n\n## Summary\nAdded hello/ })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: 'feedback' })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: /attempt 3\/3/ })).toBeDefined()
 
@@ -141,7 +186,10 @@ for (const surface of ['terminal', 'desktop'] as const) {
     await ui.press({ key: 'back' })
     await ui.press({ key: 'open-live-b' })
     expect(await ui.find({ type: 'Text', text: /m2 · attempt 2\/2 \(running\)/ })).toBeDefined()
-    expect(await ui.find({ type: 'Text', text: /Model is unavailable/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /fell back to m2 · running bash: pwd/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /last activity 10s ago/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /… running 10s/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /^attempt: in 2.0k · out 134 · cache read 256 · cache write 0 · total 2.4k/ })).toBeDefined()
     await ui.unmount()
   })
 }

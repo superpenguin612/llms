@@ -40,7 +40,7 @@ FAKE_PI = textwrap.dedent("""\
         subprocess.run(["git", "commit", "-qm", f"test: {name}"], check=True)
     if model.startswith("slow"):
         time.sleep(30)
-    if model.startswith("fail"):
+    if model.startswith("fail") and "--session" not in a:  # a continued session (retry) succeeds
         log()
         sys.exit(1)
     commit()
@@ -248,6 +248,70 @@ class TestFallback(DelegateBase):
         self.assertEqual(self.run_task("t1").returncode, 1)
         self.assertEqual(self.outcomes("t1"), [("err-a", "api_error"), ("fail-b", "failed")])
         self.assertFalse((self.data / "runs/t1/result.md").exists())
+
+
+class TestRetryCleanHere(DelegateBase):
+    def test_retry_continues_the_session_once(self):
+        self.chains(implementation=["fail-a"])
+        self.run_task("t1")
+        session = self.record("t1")["attempts"][0]["session"]
+        fb = self.tmp / "fb.md"
+        fb.write_text("Also handle empty input.\n")
+        p = self.delegate("retry", "t1", "--feedback", str(fb))
+        self.assertEqual(p.returncode, 0, p.stderr)
+        argv = self.calls("t1")[-1]["argv"]
+        self.assertEqual(argv[argv.index("--session") + 1], session)
+        self.assertEqual(argv[argv.index("--model") + 1], "fail-a")
+        self.assertEqual(argv[-1], "Also handle empty input.\n")
+        r = self.record("t1")
+        self.assertEqual(r["status"], "ok")
+        att = r["attempts"][-1]
+        self.assertTrue(att["retry"])
+        self.assertEqual(att["input"], 200)  # only the messages the retry added
+        p = self.delegate("retry", "t1", "--feedback", str(fb))
+        self.assertNotEqual(p.returncode, 0)
+        self.assertIn("already retried", p.stderr)
+
+    def test_clean_merged(self):
+        self.chains(implementation=["ok-a"])
+        self.run_task("t1")
+        self.git("merge", "-q", "--ff-only", "delegate/t1")
+        p = self.delegate("clean", "t1")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(self.record("t1")["outcome"], "merged")
+        self.assertFalse((self.data / "worktrees/repo/t1").exists())
+        self.assertEqual(self.git("branch", "--list", "delegate/*"), "")
+        self.assertTrue((self.data / "runs/t1/result.md").exists())  # run folders are kept
+        self.assertNotEqual(self.delegate("clean", "t1").returncode, 0)  # already cleaned
+
+    def test_clean_unmerged_needs_force(self):
+        self.chains(implementation=["err-a", "ok-b"])
+        self.run_task("t1")
+        p = self.delegate("clean", "t1")
+        self.assertNotEqual(p.returncode, 0)
+        self.assertIn("--force", p.stderr)
+        self.assertIsNone(self.record("t1")["outcome"])
+        self.assertEqual(self.delegate("clean", "t1", "--force").returncode, 0)
+        self.assertEqual(self.record("t1")["outcome"], "abandoned")
+        self.assertEqual(self.git("branch", "--list", "delegate/*"), "")  # backup branch too
+
+    def test_clean_opus(self):
+        self.chains(implementation=["ok-a"])
+        self.run_task("t1")
+        self.assertEqual(self.delegate("clean", "t1", "--opus").returncode, 0)
+        self.assertEqual(self.record("t1")["outcome"], "opus")
+
+    def test_here_runs_in_place(self):
+        self.chains(implementation=["ok-a"])
+        p = self.run_task("t1", "--here")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertFalse((self.data / "worktrees").exists())
+        self.assertEqual(Path(self.calls("t1")[0]["cwd"]), self.repo)
+        self.assertEqual(len(self.git("log", "--format=%s", f"{self.base}..main").splitlines()), 1)
+        r = self.record("t1")
+        self.assertEqual((r["mode"], r["worktree"], r["branch"]), ("here", None, None))
+        self.assertEqual(self.delegate("clean", "t1").returncode, 0)
+        self.assertEqual(self.record("t1")["outcome"], "merged")
 
 
 class TestSandbox(DelegateBase):

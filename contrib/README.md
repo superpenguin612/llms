@@ -45,6 +45,11 @@ and `bwrap` on PATH.
 
 ```sh
 ln -sf "$PWD/delegate/delegate" ~/.local/bin/delegate
-delegate run --repo ~/src/x/y --task fix-parser --brief brief.md
+delegate run --repo ~/src/x/y --task fix-parser --brief brief.md   # --here: in place, no worktree
 delegate status
+delegate retry fix-parser --feedback review.md   # once; continues the worker's pi session
+delegate clean fix-parser                        # after merging; --force abandons, --opus = taken over
 ```
+
+On a timeout or API error the next model in the chain starts over from the base commit, and the
+failed attempt's commits stay on `delegate/<task>@<model>` until `clean`. Run folders are kept.

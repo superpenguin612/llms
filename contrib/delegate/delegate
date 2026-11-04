@@ -1,11 +1,15 @@
 #!/usr/bin/env python3
 """delegate: run a cheap pi worker (OpenCode Go) on a brief, in its own git worktree and a sandbox.
 
-  delegate run    --repo PATH --task NAME --brief FILE [--chain implementation|bulk] [--timeout 45m]
+  delegate run    --repo PATH --task NAME --brief FILE [--chain implementation|bulk] [--timeout 45m] [--here]
+  delegate retry  TASK --feedback FILE
+  delegate clean  TASK [--opus] [--force]
   delegate status [TASK]
 
-The worker commits on `delegate/<task>` and writes `result.md` in its run folder
-(~/.local/share/delegate/runs/<task>/). Every run is one line in ~/.local/share/delegate/runs.jsonl.
+The worker commits on `delegate/<task>` (or in place with --here) and writes `result.md` in its
+run folder (~/.local/share/delegate/runs/<task>/). On a timeout or API error the next model in
+the chain starts over from the base commit; the failed attempt's commits stay on
+`delegate/<task>@<model>`. `retry` continues the last pi session once with written feedback. Every run is one line in ~/.local/share/delegate/runs.jsonl.
 Python 3 stdlib only.
 """
 
@@ -124,12 +128,24 @@ def usage(session, skip=0):
     return tot, stop
 
 
-def attempt(rec, model, workdir, message, key):
+def claim(run):
+    """Mark the run live, refusing a 4th concurrent run."""
+    live = [m for m in RUNS.glob("*/running") if alive(m)]
+    if len(live) >= MAX_LIVE:
+        die(f"{MAX_LIVE} runs are already live ({', '.join(m.parent.name for m in live)}); wait for one")
+    (run / "running").write_text(str(os.getpid()))
+
+
+def attempt(rec, model, message, key, session=None):
+    """One pi run in the sandbox; with `session`, continue that pi session instead of starting one."""
     run = Path(rec["run"])
+    workdir = rec["worktree"] or rec["repo"]
     sessions = run / "sessions"
     before = set(sessions.glob("*.jsonl"))
+    skip = len(Path(session).read_text().splitlines()) if session else 0
     pi = shutil.which("pi") or die("pi not found on PATH")
-    argv = [pi, "--provider", "opencode-go", "--model", model, "-p", "--session-dir", str(sessions),
+    argv = [pi, "--provider", "opencode-go", "--model", model, "-p",
+            *(["--session", session] if session else ["--session-dir", str(sessions)]),
             "--append-system-prompt", str(HERE / "worker-rules.md"), "--", message]
     start = time.time()
     with open(run / "pi.log", "a") as log:
@@ -137,9 +153,10 @@ def attempt(rec, model, workdir, message, key):
         log.flush()
         rc = subprocess.run(["timeout", "--kill-after=30", rec["timeout"], *sandbox(workdir, run, key, argv)],
                             stdout=log, stderr=subprocess.STDOUT).returncode
-    new = sorted(set(sessions.glob("*.jsonl")) - before)
-    session = str(new[-1]) if new else None
-    tot, stop = usage(session)
+    if not session:
+        new = sorted(set(sessions.glob("*.jsonl")) - before)
+        session = str(new[-1]) if new else None
+    tot, stop = usage(session, skip)
     if rc in (124, 137):  # 137: still running after --kill-after
         outcome = "timeout"
     elif rc == 0 and (run / "result.md").exists():
@@ -176,51 +193,127 @@ def cmd_run(a):
     run = RUNS / a.task
     if run.exists():
         die(f"task {a.task} exists ({run}); pick another name")
-    live = [m for m in RUNS.glob("*/running") if alive(m)]
-    if len(live) >= MAX_LIVE:
-        die(f"{MAX_LIVE} runs are already live ({', '.join(m.parent.name for m in live)}); wait for one")
     brief = Path(a.brief).read_text()
     key = go_key()
-    repo = Path(git(a.repo, "rev-parse", "--show-toplevel"))
-    wt = DATA / "worktrees" / repo.name / a.task
-    rec = {"task": a.task, "repo": str(repo), "mode": "worktree", "chain": a.chain, "timeout": a.timeout,
-           "base_branch": git(repo, "rev-parse", "--abbrev-ref", "HEAD"),
-           "base_commit": git(repo, "rev-parse", "HEAD"), "branch": f"delegate/{a.task}",
-           "worktree": str(wt), "run": str(run), "started": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+    rec = {"task": a.task, "mode": "here" if a.here else "worktree", "chain": a.chain, "timeout": a.timeout,
+           "run": str(run), "started": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
            "attempts": [], "status": "running", "outcome": None}
-    git(repo, "worktree", "add", "-q", "-b", rec["branch"], str(wt), "HEAD")
-    (run / "sessions").mkdir(parents=True)
-    (run / "brief.md").write_text(brief)
-    marker = run / "running"
-    marker.write_text(str(os.getpid()))
-    save(rec)
+    if a.here:  # in place, e.g. a vault: no worktree, no branch, not necessarily a git repo
+        rec |= {"repo": str(Path(a.repo).resolve()), "base_branch": None, "base_commit": None,
+                "branch": None, "worktree": None}
+    else:
+        repo = Path(git(a.repo, "rev-parse", "--show-toplevel"))
+        wt = DATA / "worktrees" / repo.name / a.task
+        rec |= {"repo": str(repo), "base_branch": git(repo, "rev-parse", "--abbrev-ref", "HEAD"),
+                "base_commit": git(repo, "rev-parse", "HEAD"), "branch": f"delegate/{a.task}",
+                "worktree": str(wt)}
+    run.mkdir(parents=True)  # claims the task name
     try:
+        claim(run)
+    except SystemExit:
+        shutil.rmtree(run)
+        raise
+    try:
+        if wt := rec["worktree"]:
+            git(rec["repo"], "worktree", "add", "-q", "-b", rec["branch"], wt, "HEAD")
+        (run / "sessions").mkdir()
+        (run / "brief.md").write_text(brief)
+        save(rec)
         for i, model in enumerate(chain):
-            att = attempt(rec, model, wt, brief, key)
+            att = attempt(rec, model, brief, key)
             rec["attempts"].append(att)
             rec["status"] = att["outcome"]
             save(rec)
             if att["outcome"] not in ("timeout", "api_error") or i == len(chain) - 1:
                 break
-            # Infrastructure failure: keep the attempt's commits, start the next model from the base.
+            # Infrastructure failure: start the next model over; in a worktree, keep the attempt's
+            # commits on a backup branch and reset to the base.
+            (run / "result.md").unlink(missing_ok=True)
+            if not wt:
+                continue
             if git(wt, "rev-parse", "HEAD") != rec["base_commit"]:
                 git(wt, "branch", "-f", f"{rec['branch']}@{model}", "HEAD")
             git(wt, "reset", "-q", "--hard", rec["base_commit"])
             git(wt, "clean", "-qfd")
-            (run / "result.md").unlink(missing_ok=True)
     finally:
-        marker.unlink()
+        (run / "running").unlink()
     summary(rec)
     return 0 if rec["status"] == "ok" else 1
 
 
+def find(task):
+    return next((r for r in records() if r["task"] == task), None) or die(f"no run named {task}")
+
+
+def cmd_retry(a):
+    rec = find(a.task)
+    run = Path(rec["run"])
+    if rec["outcome"]:
+        die(f"{a.task} is already cleaned ({rec['outcome']})")
+    if alive(run / "running"):
+        die(f"{a.task} is still running")
+    if any(x.get("retry") for x in rec["attempts"]):
+        die(f"{a.task} was already retried once; take it over instead")
+    last = rec["attempts"][-1] if rec["attempts"] else {}
+    if not last.get("session"):
+        die(f"{a.task} has no pi session to continue")
+    feedback = Path(a.feedback).read_text()
+    key = go_key()
+    claim(run)
+    try:
+        (run / "feedback.md").write_text(feedback)
+        (run / "result.md").unlink(missing_ok=True)
+        att = attempt(rec, last["model"], feedback, key, session=last["session"])
+        rec["attempts"].append(att | {"retry": True})
+        rec["status"] = att["outcome"]
+        save(rec)
+    finally:
+        (run / "running").unlink()
+    summary(rec)
+    return 0 if rec["status"] == "ok" else 1
+
+
+def cmd_clean(a):
+    rec = find(a.task)
+    if rec["outcome"]:
+        die(f"{a.task} is already cleaned ({rec['outcome']})")
+    if alive(Path(rec["run"]) / "running"):
+        die(f"{a.task} is still running")
+    repo, branch = rec["repo"], rec["branch"]
+    if rec["worktree"]:
+        head = subprocess.run(["git", "-C", repo, "rev-parse", "-q", "--verify", branch],
+                              capture_output=True, text=True).stdout.strip()
+        merged = head and head != rec["base_commit"] and subprocess.run(
+            ["git", "-C", repo, "merge-base", "--is-ancestor", head, rec["base_branch"]]).returncode == 0
+    else:
+        merged = not a.force  # --here: accepted work is already in place
+    if a.opus:
+        outcome = "opus"
+    elif merged:
+        outcome = "merged"
+    elif a.force:
+        outcome = "abandoned"
+    else:
+        die(f"{branch} is not merged into {rec['base_branch']}; pass --force to abandon it, "
+            "or --opus if Opus took over")
+    if rec["worktree"]:
+        if Path(rec["worktree"]).exists():
+            git(repo, "worktree", "remove", "--force", rec["worktree"])
+        git(repo, "worktree", "prune")
+        for b in git(repo, "for-each-ref", "--format=%(refname:short)",
+                     f"refs/heads/{branch}", f"refs/heads/{branch}@*").split():
+            git(repo, "branch", "-q", "-D", b)
+    rec["outcome"] = outcome
+    save(rec)
+    print(f"delegate: {a.task} cleaned ({outcome}); run folder kept: {rec['run']}")
+    return 0
+
+
 def cmd_status(a):
-    recs = records()
     if a.task:
-        rec = next((r for r in recs if r["task"] == a.task), None) or die(f"no run named {a.task}")
-        print(json.dumps(rec, indent=2))
+        print(json.dumps(find(a.task), indent=2))
         return 0
-    for r in recs:
+    for r in records():
         if r["outcome"] is None:
             state = "running" if alive(Path(r["run"]) / "running") else r["status"]
             model = r["attempts"][-1]["model"] if r["attempts"] else "-"
@@ -238,7 +331,17 @@ def main():
     p.add_argument("--chain", default="implementation")
     p.add_argument("--timeout", default="45m", type=lambda s: re.fullmatch(r"\d+[smh]?", s) and s
                    or die("--timeout takes e.g. 90s, 45m or 1h"))
+    p.add_argument("--here", action="store_true", help="work in place (--repo or the current directory)")
     p.set_defaults(fn=cmd_run)
+    p = sub.add_parser("retry", help="continue the last attempt's session once, with feedback")
+    p.add_argument("task")
+    p.add_argument("--feedback", required=True)
+    p.set_defaults(fn=cmd_retry)
+    p = sub.add_parser("clean", help="remove a task's worktree and branches and record its outcome")
+    p.add_argument("task")
+    p.add_argument("--opus", action="store_true", help="Opus took the task over")
+    p.add_argument("--force", action="store_true", help="abandon an unmerged branch")
+    p.set_defaults(fn=cmd_clean)
     p = sub.add_parser("status", help="list live and uncleaned runs, or show one")
     p.add_argument("task", nargs="?")
     p.set_defaults(fn=cmd_status)

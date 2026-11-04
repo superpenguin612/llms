@@ -106,8 +106,13 @@ export const register: Register = on => {
   })
 
   on('command.run', { command: 'delegate' }, async $ => {
+    // /delegate toggles the pane.
+    if ((await $.ui.panes()).some(p => p.id === PANE)) {
+      await $.ui.close({ id: PANE })
+      return { text: 'Delegate pane closed.' }
+    }
     await $.ui.open({ id: PANE, title: TITLE })
-    return { text: 'Delegate pane opened.' }
+    return { text: 'Delegate pane opened. /delegate again or q in the pane closes it.' }
   })
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
@@ -140,6 +145,9 @@ export const register: Register = on => {
               {row.result && <Text dimColor wrap="truncate-end">{row.result}</Text>}
             </Box>
           ))}
+          <Button key="close" hotkey="q" plain dimColor onPress={() => $.ui.close({ id: PANE })}>
+            close
+          </Button>
         </Box>
       )
     }
@@ -248,6 +256,9 @@ export const register: Register = on => {
         </Box>
         <Button key="end" hotkey="e" plain dimColor onPress={() => follow($)}>
           follow the end
+        </Button>
+        <Button key="close" hotkey="q" plain dimColor onPress={() => $.ui.close({ id: PANE })}>
+          close
         </Button>
       </Box>
     )

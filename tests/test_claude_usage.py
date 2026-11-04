@@ -168,8 +168,8 @@ class TestClaudeUsage(unittest.TestCase):
         with mock.patch("sys.stdout"):
             cu.main(["report", "--out", str(out)])
         text = next(out.glob("*-W*.md")).read_text()
-        self.assertIn("| m1 | 1 | 0 | 0 | 1 | 0 | 0 | 100 | 10 | 20 | 0 | $0.10 |", text)
-        self.assertIn("| m2 | 3 | 2 | 1 | 0 | 0 | 0 | 900 | 90 | 80 | 100 | $0.90 |", text)
+        self.assertIn("| m1 | 1 | 0 | 0 | 1 | 0 | 0 | 0 | 100 | 10 | 20 | 0 | $0.10 |", text)
+        self.assertIn("| m2 | 3 | 2 | 1 | 0 | 0 | 0 | 0 | 900 | 90 | 80 | 100 | $0.90 |", text)
         self.assertIn("| fallback-task | implementation | merged | 3 | yes | yes | $0.60 | — |", text)
         self.assertIn("| timeout-task | slow | abandoned | 1 | no | no | $0.40 | — |", text)
 
@@ -193,8 +193,8 @@ class TestClaudeUsage(unittest.TestCase):
         with mock.patch("sys.stdout"):
             cu.main(["report", "--out", str(out)])
         text = next(out.glob("*-W*.md")).read_text()
-        self.assertIn("| m1 | 2 | 0 | 1 | 0 | 1 | 0 | 400 | 40 | 0 | 0 | $0.40 |", text)
-        self.assertIn("| m2 | 3 | 3 | 0 | 0 | 0 | 1 | 1.1k | 110 | 0 | 0 | $1.10 |", text)
+        self.assertIn("| m1 | 2 | 0 | 1 | 0 | 1 | 0 | 0 | 400 | 40 | 0 | 0 | $0.40 |", text)
+        self.assertIn("| m2 | 3 | 3 | 0 | 0 | 0 | 0 | 1 | 1.1k | 110 | 0 | 0 | $1.10 |", text)
         self.assertIn("Takeovers: 1 of 3 runs", text)
 
     def test_report_delegated_links_session(self):

@@ -168,6 +168,7 @@ class TestRun(DelegateBase):
         self.assertIn("-p", argv)
         self.assertEqual(argv[argv.index("--session-dir") + 1], str(run / "sessions"))
         self.assertEqual(argv[argv.index("--append-system-prompt") + 1], str((self.tool / "worker-rules.md").resolve()))
+        self.assertNotIn(str((self.tool / "here-rules.md").resolve()), argv)  # a worktree commits
         self.assertEqual(argv[-1], "Goal: add a file.\n")
         r = self.record("t1")
         self.assertEqual((r["mode"], r["chain"], r["status"], r["outcome"]), ("worktree", "implementation", "ok", None))
@@ -389,6 +390,10 @@ class TestRetryCleanHere(DelegateBase):
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertFalse((self.data / "worktrees").exists())
         self.assertEqual(Path(self.calls("t1")[0]["cwd"]), self.repo)
+        argv = self.calls("t1")[0]["argv"]
+        appends = [argv[i + 1] for i, x in enumerate(argv) if x == "--append-system-prompt"]
+        self.assertEqual(appends, [str((self.tool / "worker-rules.md").resolve()),
+                                   str((self.tool / "here-rules.md").resolve())])
         self.assertEqual(len(self.git("log", "--format=%s", f"{self.base}..main").splitlines()), 1)
         r = self.record("t1")
         self.assertEqual((r["mode"], r["worktree"], r["branch"]), ("here", None, None))

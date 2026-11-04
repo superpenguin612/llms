@@ -6,7 +6,8 @@
   delegate clean  TASK [--opus] [--force]
   delegate status [TASK]
 
-The worker commits on `delegate/<task>` (or in place with --here) and writes `result.md` in its
+The worker commits on `delegate/<task>` (or, with --here, works in place and is told not to
+commit, because others may share the checkout) and writes `result.md` in its
 run folder (~/.local/share/delegate/runs/<task>/). On a timeout or API error the next model in
 the chain starts over from the base commit; the failed attempt's commits stay on
 `delegate/<task>@<model>`. A worker killed by hand (SIGTERM or SIGKILL to it, or to delegate
@@ -166,8 +167,10 @@ def attempt(rec, model, message, key, session=None):
     skip = len(Path(session).read_text().splitlines()) if session else 0
     pi = shutil.which("pi") or die("pi not found on PATH")
     argv = [pi, "--provider", "opencode-go", "--model", model, "-p",
-            *(["--session", session] if session else ["--session-dir", str(sessions)]),
-            "--append-system-prompt", str(HERE / "worker-rules.md"), "--", message]
+            *(["--session", session] if session else ["--session-dir", str(sessions)])]
+    for rules in ("worker-rules.md", *(["here-rules.md"] if rec["mode"] == "here" else ())):
+        argv += ["--append-system-prompt", str(HERE / rules)]
+    argv += ["--", message]
     start = time.time()
     with open(run / "pi.log", "a") as log:
         log.write(f"=== {model} {time.strftime('%Y-%m-%dT%H:%M:%S')}\n")

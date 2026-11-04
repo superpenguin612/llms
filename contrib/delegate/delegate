@@ -200,7 +200,8 @@ def attempt(rec, model, message, key, session=None):
         outcome = "killed"
     elif rc in (124, 137) and elapsed >= seconds(rec["timeout"]):
         outcome = "timeout"
-    elif rc < 0 or rc >= 128:  # timeout sometimes re-raises the signal on itself
+    elif rc < 0 or rc >= 128 or (rc in (2, 15) and elapsed < seconds(rec["timeout"])):
+        # a signal exit; timeout sometimes re-raises it, or reports just the signal number
         outcome = "killed"
     elif rc == 0 and (run / "result.md").exists():
         outcome = "ok"

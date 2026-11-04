@@ -29,6 +29,8 @@ FAKE_PI = textwrap.dedent("""\
         Path("/tmp/delegate-private-tmp").write_text(model)
     if model.startswith("sig"):  # killed by hand, well before any timeout
         os.kill(os.getpid(), 9)
+    if model.startswith("term"):  # stopped by hand with SIGTERM
+        os.kill(os.getpid(), 15)
     if "--session" in a:
         session = Path(a[a.index("--session") + 1])
     else:
@@ -340,6 +342,11 @@ class TestFallback(DelegateBase):
         self.chains(implementation=["sig-a", "ok-b"])
         self.assertEqual(self.run_task("t1").returncode, 1)
         self.assertEqual(self.outcomes("t1"), [("sig-a", "killed")])
+
+    def test_worker_sigterm_is_killed(self):
+        self.chains(implementation=["term-a", "ok-b"])
+        self.assertEqual(self.run_task("t1").returncode, 1)
+        self.assertEqual(self.outcomes("t1"), [("term-a", "killed")])
 
     def test_result_removed_before_next_model(self):
         self.chains(implementation=["err-a", "fail-b"])

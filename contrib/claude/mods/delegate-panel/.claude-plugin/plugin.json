@@ -1,0 +1,6 @@
+{
+  "name": "delegate-panel",
+  "version": "0.1.0",
+  "description": "Side pane watching delegate workers: live and uncleaned runs, and each worker's pi session as a transcript",
+  "types": "./types/index.d.ts"
+}

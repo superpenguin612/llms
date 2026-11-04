@@ -3,3 +3,6 @@ __pycache__/
 .kb/
 build/
 dist/
+
+# Claude Code mod builds
+contrib/claude/mods/*/.claude-plugin/types/

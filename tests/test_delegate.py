@@ -25,6 +25,8 @@ FAKE_PI = textwrap.dedent("""\
         f.write(json.dumps({"argv": a, "cwd": os.getcwd(),
                             "stdin_null": os.path.samefile("/proc/self/fd/0", "/dev/null")}) + "\\n")
     model = a[a.index("--model") + 1]
+    if model.startswith("tmpx"):
+        Path("/tmp/delegate-private-tmp").write_text(model)
     if model.startswith("sig"):  # killed by hand, well before any timeout
         os.kill(os.getpid(), 9)
     if "--session" in a:
@@ -67,10 +69,34 @@ def sh(cwd, *args, env):
     return subprocess.run(args, cwd=cwd, env=env, check=True, capture_output=True, text=True).stdout.strip()
 
 
+def tempdir():
+    """A temp dir outside /tmp: workers get a private tmpfs /tmp, so fixtures under the host
+    /tmp (the fake pi on PATH, HOME, the repo) would not exist inside their sandbox."""
+    for base in ("/var/tmp", Path.cwd() / "build"):
+        try:
+            base = Path(base).resolve()
+            if base == Path("/tmp") or Path("/tmp") in base.parents:
+                continue
+            base.mkdir(parents=True, exist_ok=True)
+            return tempfile.TemporaryDirectory(dir=base, prefix="delegate-test-")
+        except OSError:
+            continue
+    return tempfile.TemporaryDirectory()
+
+
+def load_delegate():
+    from importlib.machinery import SourceFileLoader
+    import importlib.util
+    loader = SourceFileLoader("delegate_mod", str(SRC / "delegate"))
+    mod = importlib.util.module_from_spec(importlib.util.spec_from_loader("delegate_mod", loader))
+    loader.exec_module(mod)
+    return mod
+
+
 @unittest.skipUnless(shutil.which("bwrap"), "needs bubblewrap")
 class DelegateBase(unittest.TestCase):
     def setUp(self):
-        td = tempfile.TemporaryDirectory()
+        td = tempdir()
         self.addCleanup(td.cleanup)
         self.tmp = Path(td.name)
         self.home = self.tmp / "home"
@@ -371,6 +397,15 @@ class TestRetryCleanHere(DelegateBase):
 
 
 class TestSandbox(DelegateBase):
+    def test_tmp_is_private(self):
+        self.chains(implementation=["tmpx-a"])
+        marker = Path("/tmp/delegate-private-tmp")
+        marker.unlink(missing_ok=True)
+        self.addCleanup(lambda: marker.unlink(missing_ok=True))
+        p = self.run_task("t1")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertFalse(marker.exists())  # the worker's /tmp is a private tmpfs
+
     def test_worker_sees_allowlisted_env_and_no_credentials(self):
         self.chains(implementation=["probe"])
         (self.home / ".codex").mkdir()
@@ -396,17 +431,36 @@ class TestSandbox(DelegateBase):
         self.assertFalse((self.data / "worktrees").exists())
 
 
+@unittest.skipUnless(shutil.which("bwrap"), "needs bubblewrap")
+class TestSandboxArgv(unittest.TestCase):
+    """The bwrap argv itself: a private /tmp, with the worker's own paths bound back after it."""
+
+    def setUp(self):
+        td = tempfile.TemporaryDirectory()
+        self.addCleanup(td.cleanup)
+        self.mod = load_delegate()
+        self.mod.DATA = Path(td.name)
+
+    def test_private_tmp_and_binds_under_it(self):
+        argv = self.mod.sandbox("/tmp/delegate/work", "/tmp/delegate/run", "k", ["true"])
+        i = next(i for i, x in enumerate(argv) if x == "--tmpfs" and argv[i + 1] == "/tmp")
+        self.assertEqual(argv[i + 2:i + 8], ["--bind", "/tmp/delegate/work", "/tmp/delegate/work",
+                                            "--bind", "/tmp/delegate/run", "/tmp/delegate/run"])
+
+    def test_no_binds_when_nothing_is_under_tmp(self):
+        argv = self.mod.sandbox("/work", "/runs", "k", ["true"])
+        i = next(i for i, x in enumerate(argv) if x == "--tmpfs" and argv[i + 1] == "/tmp")
+        self.assertEqual(argv[i + 2], "--unshare-pid")
+        self.assertNotIn("--bind", argv[i:])
+
+
 @unittest.skipUnless(shutil.which("bwrap") and (Path.home() / "creds/opencode-go.env").exists(),
                      "needs bubblewrap and this machine's ~/creds")
 class TestRealHomeSandbox(unittest.TestCase):
     """The sandbox against this machine's real home: credentials hidden, commits still work."""
 
     def test_real_credentials_hidden(self):
-        from importlib.machinery import SourceFileLoader
-        import importlib.util
-        loader = SourceFileLoader("delegate_mod", str(SRC / "delegate"))
-        mod = importlib.util.module_from_spec(importlib.util.spec_from_loader("delegate_mod", loader))
-        loader.exec_module(mod)
+        mod = load_delegate()
         home = Path.home()
         with tempfile.TemporaryDirectory() as td:
             mod.DATA = Path(td) / "data"

@@ -104,8 +104,8 @@ def go_key():
 
 def sandbox(workdir, run, key, argv):
     """argv under bubblewrap: empty environment plus ALLOW, credentials in HIDE hidden
-    (dirs as empty tmpfs, files as an empty read-only file), own PID namespace so a timeout
-    kills everything the worker started."""
+    (dirs as empty tmpfs, files as an empty read-only file), a private /tmp so a worker can't
+    write outside its directory, own PID namespace so a timeout kills everything it started."""
     env = [f"{k}={os.environ[k]}" for k in ALLOW if k in os.environ]
     env += [f"OPENCODE_API_KEY={key}", f"DELEGATE_RUN={run}",
             # The signing key (~/creds/git_signing) is hidden, so commits can't be SSH-signed: worker commits are unsigned.
@@ -122,8 +122,12 @@ def sandbox(workdir, run, key, argv):
         elif p.exists():
             hide += ["--ro-bind", str(empty), str(p)]
     bwrap = shutil.which("bwrap") or die("bwrap not found (apt install bubblewrap)")
+    binds = []  # /tmp is private, so bind back what the worker needs from under it (mounts apply in order)
+    for p in (Path(workdir), Path(run)):
+        if Path("/tmp") == p or Path("/tmp") in p.parents:
+            binds += ["--bind", str(p), str(p)]
     return ["env", "-i", *env, bwrap, "--dev-bind", "/", "/", "--proc", "/proc", *hide,
-            "--unshare-pid", "--die-with-parent", "--chdir", str(workdir), "--", *argv]
+            "--tmpfs", "/tmp", *binds, "--unshare-pid", "--die-with-parent", "--chdir", str(workdir), "--", *argv]
 
 
 def usage(session, skip=0):

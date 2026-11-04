@@ -31,3 +31,17 @@ Every Monday at 06:00 (or at next boot if missed) it writes the last 7 days to
 250k/400k context, cache rebuilds by cause, model mix and Opus subagents, repeat reads, idle
 compactions. Dollars come from Claude Code's `cost-state` records, which it writes when a session
 exits; sessions still running show as "no cost record" until they do.
+
+## delegate
+
+Runs a cheap OpenCode Go model through pi as an unattended worker: one git worktree and branch
+(`delegate/<task>`) per task, a brief in, commits and a `result.md` out. Model chains are in
+`delegate/chains.json`; the worker's extra instructions in `delegate/worker-rules.md`. Every run
+is one JSON line in `~/.local/share/delegate/runs.jsonl`. At most 3 runs are live at once.
+Python 3 stdlib only; needs `pi` on PATH.
+
+```sh
+ln -sf "$PWD/delegate/delegate" ~/.local/bin/delegate
+delegate run --repo ~/src/x/y --task fix-parser --brief brief.md
+delegate status
+```

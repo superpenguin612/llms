@@ -1,0 +1,203 @@
+#!/usr/bin/env python3
+"""delegate: run a cheap pi worker (OpenCode Go) on a brief, in its own git worktree.
+
+  delegate run    --repo PATH --task NAME --brief FILE [--chain implementation|bulk] [--timeout 45m]
+  delegate status [TASK]
+
+The worker commits on `delegate/<task>` and writes `result.md` in its run folder
+(~/.local/share/delegate/runs/<task>/). Every run is one line in ~/.local/share/delegate/runs.jsonl.
+Python 3 stdlib only.
+"""
+
+import argparse
+import fcntl
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+DATA = Path.home() / ".local/share/delegate"
+RUNS = DATA / "runs"
+LOG = DATA / "runs.jsonl"
+MAX_LIVE = 3
+
+
+def die(msg):
+    sys.exit(f"delegate: {msg}")
+
+
+def git(cwd, *args):
+    p = subprocess.run(["git", "-C", str(cwd), *args], capture_output=True, text=True)
+    if p.returncode:
+        die(f"git {' '.join(args)}: {p.stderr.strip()}")
+    return p.stdout.strip()
+
+
+def alive(marker):
+    try:
+        os.kill(int(marker.read_text()), 0)
+        return True
+    except (OSError, ValueError):
+        return False
+
+
+def records():
+    return [json.loads(l) for l in LOG.read_text().splitlines() if l.strip()] if LOG.exists() else []
+
+
+def save(rec):
+    """Write the task's line in runs.jsonl: replace it if present, else append."""
+    DATA.mkdir(parents=True, exist_ok=True)
+    LOG.touch()
+    with open(LOG, "r+") as f:
+        fcntl.flock(f, fcntl.LOCK_EX)
+        lines, found = [], False
+        for line in f.read().splitlines():
+            if line.strip() and json.loads(line)["task"] == rec["task"]:
+                line, found = json.dumps(rec), True
+            lines.append(line)
+        if not found:
+            lines.append(json.dumps(rec))
+        f.seek(0)
+        f.truncate()
+        f.write("\n".join(lines) + "\n")
+
+
+def usage(session, skip=0):
+    """Token and cost sums of the assistant messages in a pi session log (after `skip` lines),
+    and the last message's stopReason."""
+    tot = {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0, "cost": 0.0}
+    stop = None
+    for line in Path(session).read_text().splitlines()[skip:] if session else []:
+        m = json.loads(line).get("message") or {}
+        if m.get("role") != "assistant":
+            continue
+        u = m.get("usage") or {}
+        tot["input"] += u.get("input", 0)
+        tot["output"] += u.get("output", 0)
+        tot["cache_read"] += u.get("cacheRead", 0)
+        tot["cache_write"] += u.get("cacheWrite", 0)
+        tot["cost"] += (u.get("cost") or {}).get("total", 0)
+        stop = m.get("stopReason")
+    return tot, stop
+
+
+def attempt(rec, model, workdir, message):
+    run = Path(rec["run"])
+    sessions = run / "sessions"
+    before = set(sessions.glob("*.jsonl"))
+    pi = shutil.which("pi") or die("pi not found on PATH")
+    argv = [pi, "--provider", "opencode-go", "--model", model, "-p", "--session-dir", str(sessions),
+            "--append-system-prompt", str(HERE / "worker-rules.md"), "--", message]
+    start = time.time()
+    with open(run / "pi.log", "a") as log:
+        log.write(f"=== {model} {time.strftime('%Y-%m-%dT%H:%M:%S')}\n")
+        log.flush()
+        rc = subprocess.run(["timeout", "--kill-after=30", rec["timeout"], *argv], cwd=workdir,
+                            env={**os.environ, "DELEGATE_RUN": str(run)},
+                            stdout=log, stderr=subprocess.STDOUT).returncode
+    new = sorted(set(sessions.glob("*.jsonl")) - before)
+    session = str(new[-1]) if new else None
+    tot, stop = usage(session)
+    if rc in (124, 137):  # 137: still running after --kill-after
+        outcome = "timeout"
+    elif rc == 0 and (run / "result.md").exists():
+        outcome = "ok"
+    elif rc and stop == "error":  # pi logs a failed API call as stopReason "error" and exits 1
+        outcome = "api_error"
+    else:
+        outcome = "failed"
+    return {"model": model, "outcome": outcome, "exit": rc, **tot,
+            "seconds": round(time.time() - start), "session": session}
+
+
+def summary(rec):
+    run = Path(rec["run"])
+    att = rec["attempts"][-1] if rec["attempts"] else {}
+    print(f"delegate: {rec['task']} {rec['status']} ({att.get('model')})")
+    if rec["worktree"]:
+        commits = git(rec["worktree"], "log", "--oneline", f"{rec['base_commit']}..HEAD")
+        print("commits:\n" + ("\n".join("  " + c for c in commits.splitlines()) or "  none"))
+    result = run / "result.md"
+    if result.exists():
+        print("result.md:\n" + "\n".join("  " + l for l in result.read_text().splitlines()[:15]))
+    print(f"run: {run}")
+    if rec["worktree"]:
+        print(f"worktree: {rec['worktree']} (branch {rec['branch']})")
+
+
+def cmd_run(a):
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", a.task):
+        die("task names use letters, digits, '.', '_' and '-'")
+    chain = json.loads((HERE / "chains.json").read_text()).get(a.chain)
+    if not chain:
+        die(f"chain '{a.chain}' is empty or missing in {HERE / 'chains.json'}")
+    run = RUNS / a.task
+    if run.exists():
+        die(f"task {a.task} exists ({run}); pick another name")
+    live = [m for m in RUNS.glob("*/running") if alive(m)]
+    if len(live) >= MAX_LIVE:
+        die(f"{MAX_LIVE} runs are already live ({', '.join(m.parent.name for m in live)}); wait for one")
+    brief = Path(a.brief).read_text()
+    repo = Path(git(a.repo, "rev-parse", "--show-toplevel"))
+    wt = DATA / "worktrees" / repo.name / a.task
+    rec = {"task": a.task, "repo": str(repo), "mode": "worktree", "chain": a.chain, "timeout": a.timeout,
+           "base_branch": git(repo, "rev-parse", "--abbrev-ref", "HEAD"),
+           "base_commit": git(repo, "rev-parse", "HEAD"), "branch": f"delegate/{a.task}",
+           "worktree": str(wt), "run": str(run), "started": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+           "attempts": [], "status": "running", "outcome": None}
+    git(repo, "worktree", "add", "-q", "-b", rec["branch"], str(wt), "HEAD")
+    (run / "sessions").mkdir(parents=True)
+    (run / "brief.md").write_text(brief)
+    marker = run / "running"
+    marker.write_text(str(os.getpid()))
+    save(rec)
+    try:
+        rec["attempts"].append(attempt(rec, chain[0], wt, brief))
+        rec["status"] = rec["attempts"][-1]["outcome"]
+        save(rec)
+    finally:
+        marker.unlink()
+    summary(rec)
+    return 0 if rec["status"] == "ok" else 1
+
+
+def cmd_status(a):
+    recs = records()
+    if a.task:
+        rec = next((r for r in recs if r["task"] == a.task), None) or die(f"no run named {a.task}")
+        print(json.dumps(rec, indent=2))
+        return 0
+    for r in recs:
+        if r["outcome"] is None:
+            state = "running" if alive(Path(r["run"]) / "running") else r["status"]
+            model = r["attempts"][-1]["model"] if r["attempts"] else "-"
+            print(f"{r['task']}  {state}  {model}  {r['mode']}  {r['repo']}")
+    return 0
+
+
+def main():
+    ap = argparse.ArgumentParser(prog="delegate", description=__doc__.splitlines()[0])
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    p = sub.add_parser("run", help="run a worker on a brief")
+    p.add_argument("--repo", default=".")
+    p.add_argument("--task", required=True)
+    p.add_argument("--brief", required=True)
+    p.add_argument("--chain", default="implementation")
+    p.add_argument("--timeout", default="45m", type=lambda s: re.fullmatch(r"\d+[smh]?", s) and s
+                   or die("--timeout takes e.g. 90s, 45m or 1h"))
+    p.set_defaults(fn=cmd_run)
+    p = sub.add_parser("status", help="list live and uncleaned runs, or show one")
+    p.add_argument("task", nargs="?")
+    p.set_defaults(fn=cmd_status)
+    a = ap.parse_args()
+    return a.fn(a)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

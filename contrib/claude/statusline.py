@@ -6,7 +6,7 @@ def fg(n, s):
     return "\x1b[38;5;%dm%s\x1b[0m" % (n, s)
 
 YELLOW, GREEN, PURPLE, DIM, EMPTY = 222, 114, 183, 240, 238
-RED, CTX_GREEN, CTX_YELLOW = 203, 114, 222
+RED, CTX_GREEN, CTX_YELLOW, CYAN, LIGHT = 203, 114, 222, 117, 252
 SEP = fg(DIM, " · ")
 
 def num(v):
@@ -139,9 +139,9 @@ def turn_segments(turn, now):
     c = CTX_GREEN if ctx < WARN else CTX_YELLOW if ctx < DANGER else RED
     out = [fg(c, "ctx " + human(ctx))]
     left = int(t + CACHE_TTL - now)
-    out.append(fg(RED, "cache cold") if left <= 0 else fg(RED if left < 600 else DIM, "cache %dm" % (left // 60)))
+    out.append(fg(RED, "cache cold") if left <= 0 else fg(RED if left < 600 else CYAN, "cache %dm" % (left // 60)))
     if ctx:
-        out.append(fg(DIM, "hit %d%%" % round(100.0 * read / ctx)))
+        out.append(fg(LIGHT, "hit %d%%" % round(100.0 * read / ctx)))
     return out
 
 def main():
@@ -153,18 +153,18 @@ def main():
         data = {}
     parts = []
 
-    rl = data.get("rate_limits") if isinstance(data.get("rate_limits"), dict) else {}
-    for seg in (limit("5h", rl.get("five_hour"), YELLOW, True),
-                limit("7d", rl.get("seven_day"), GREEN, False)):
-        if seg:
-            parts.append(seg)
-
     model = data.get("model")
     name = model.get("display_name") if isinstance(model, dict) else None
     eff = data.get("effort")
     level = eff.get("level") if isinstance(eff, dict) else None
     if name:
         parts.append(fg(PURPLE, name + (" " + level if isinstance(level, str) else "")))
+
+    rl = data.get("rate_limits") if isinstance(data.get("rate_limits"), dict) else {}
+    for seg in (limit("5h", rl.get("five_hour"), YELLOW, True),
+                limit("7d", rl.get("seven_day"), GREEN, False)):
+        if seg:
+            parts.append(seg)
 
     cost = data.get("cost")
     usd = num(cost.get("total_cost_usd")) if isinstance(cost, dict) else None

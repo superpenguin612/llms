@@ -93,7 +93,22 @@ def load_delegate():
     return mod
 
 
-@unittest.skipUnless(shutil.which("bwrap"), "needs bubblewrap")
+def sandbox_works():
+    """Probe bwrap once: some environments ship it but forbid user/PID namespaces."""
+    if not shutil.which("bwrap"):
+        return False, "needs bubblewrap"
+    p = subprocess.run(["bwrap", "--dev-bind", "/", "/", "--unshare-pid", "true"],
+                       capture_output=True, text=True)
+    if p.returncode:
+        reason = p.stderr.strip().splitlines()[0] if p.stderr.strip() else f"exit {p.returncode}"
+        return False, f"bwrap cannot create a user/PID namespace here ({reason})"
+    return True, ""
+
+
+SANDBOX, SANDBOX_SKIP = sandbox_works()
+
+
+@unittest.skipUnless(SANDBOX, SANDBOX_SKIP)
 class DelegateBase(unittest.TestCase):
     def setUp(self):
         td = tempdir()
@@ -459,8 +474,8 @@ class TestSandboxArgv(unittest.TestCase):
         self.assertNotIn("--bind", argv[i:])
 
 
-@unittest.skipUnless(shutil.which("bwrap") and (Path.home() / "creds/opencode-go.env").exists(),
-                     "needs bubblewrap and this machine's ~/creds")
+@unittest.skipUnless(SANDBOX and (Path.home() / "creds/opencode-go.env").exists(),
+                     SANDBOX_SKIP or "needs this machine's ~/creds")
 class TestRealHomeSandbox(unittest.TestCase):
     """The sandbox against this machine's real home: credentials hidden, commits still work."""
 

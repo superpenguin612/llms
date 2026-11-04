@@ -17,14 +17,29 @@ export type Item =
   | { kind: 'user'; text: string }
   | { kind: 'text'; text: string }
   | { kind: 'error'; text: string }
-  | { kind: 'tool'; id: string; name: string; args: string; output?: string; isError?: boolean }
+  | { kind: 'tool'; id: string; name: string; args: string; output?: string; isError?: boolean; started: number; ended?: number }
 
 // One pi prompt and everything after it: an attempt, or a retry appended to the same file.
-export type Segment = { items: Item[]; usage: Usage }
+// `last` is the newest entry's time (ms); `done` whether the model's last turn ended it.
+export type Segment = { items: Item[]; usage: Usage; last: number; done: boolean }
 
 export const FOLD = 6
 
 const zero = (): Usage => ({ input: 0, output: 0, cache_read: 0, cache_write: 0, cost: 0 })
+
+export const sum = (us: Usage[]) =>
+  us.reduce(
+    (t, u) => ({
+      input: t.input + u.input,
+      output: t.output + u.output,
+      cache_read: t.cache_read + u.cache_read,
+      cache_write: t.cache_write + u.cache_write,
+      cost: t.cost + u.cost,
+    }),
+    zero(),
+  )
+
+export const totalTokens = (u: Usage) => u.input + u.output + u.cache_read + u.cache_write
 
 const parseLines = (text: string): unknown[] =>
   text.split('\n').flatMap(line => {
@@ -98,16 +113,18 @@ type Msg = { role?: string; content?: unknown; usage?: Record<string, any>; stop
 export const parseSession = (text: string): Segment[] => {
   const segments: Segment[] = []
   let tools = new Map<string, Extract<Item, { kind: 'tool' }>>()
-  for (const entry of parseLines(text) as { type?: string; message?: Msg }[]) {
+  for (const entry of parseLines(text) as { type?: string; timestamp?: string; message?: Msg }[]) {
     const m = entry.message
-    if (entry.type !== 'message' || !m) continue
-    if (m.role === 'user') {
-      segments.push({ items: [{ kind: 'user', text: textOf(m.content) }], usage: zero() })
+    const at = Date.parse(entry.timestamp ?? '')
+    if (entry.type === 'message' && m?.role === 'user') {
+      segments.push({ items: [{ kind: 'user', text: textOf(m.content) }], usage: zero(), last: at, done: false })
       tools = new Map()
       continue
     }
     const seg = segments.at(-1)
     if (!seg) continue // before the first prompt (system), or cut off by a tail read
+    if (!Number.isNaN(at)) seg.last = at
+    if (entry.type !== 'message' || !m) continue
     if (m.role === 'assistant') {
       const u = m.usage ?? {}
       seg.usage.input += u.input ?? 0
@@ -118,15 +135,16 @@ export const parseSession = (text: string): Segment[] => {
       for (const b of Array.isArray(m.content) ? m.content : []) {
         if (b?.type === 'text' && b.text.trim()) seg.items.push({ kind: 'text', text: b.text.trim() })
         if (b?.type === 'toolCall') {
-          const tool = { kind: 'tool' as const, id: b.id, name: b.name, args: keyArgs(b.arguments) }
+          const tool = { kind: 'tool' as const, id: b.id, name: b.name, args: keyArgs(b.arguments), started: at }
           tools.set(b.id, tool)
           seg.items.push(tool)
         }
       }
       if (m.stopReason === 'error') seg.items.push({ kind: 'error', text: m.errorMessage ?? 'error' })
+      seg.done = m.stopReason === 'stop' || m.stopReason === 'error'
     } else if (m.role === 'toolResult') {
       const tool = tools.get(m.toolCallId ?? '')
-      if (tool) Object.assign(tool, { output: textOf(m.content), isError: m.isError })
+      if (tool) Object.assign(tool, { output: textOf(m.content), isError: m.isError, ended: at })
     }
   }
   return segments
@@ -153,4 +171,36 @@ export const fitTail = (items: Item[], expanded: readonly string[], budget = 90_
   let from = 1
   while (total > budget && from < items.length - 1) total -= size(items[from++]!)
   return { items: from > 1 ? [...items.slice(0, 1), ...items.slice(from)] : items, dropped: from - 1 }
+}
+
+export const STALL_MS = 120_000
+const SPIN = [...'⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏']
+const VERB: Record<string, string> = { write: 'writing', edit: 'editing', read: 'reading' }
+
+const short = (text: string) => {
+  const line = text.split('\n')[0] ?? ''
+  return line.length > 60 || text.includes('\n') ? `${line.slice(0, 60)}…` : line
+}
+
+// What the worker is doing, from its segment's newest entries: a tool call still without its
+// result (the first of the last batch), else the model's turn.
+export const doing = (seg: Segment | undefined) => {
+  if (!seg) return 'starting pi'
+  let i = seg.items.length
+  while (i > 0 && seg.items[i - 1]!.kind === 'tool') i--
+  const open = seg.items.slice(i).find(it => it.kind === 'tool' && it.output === undefined)
+  if (open?.kind === 'tool') return `${VERB[open.name] ?? `running ${open.name}:`} ${short(open.args)}`
+  if (seg.done) return seg.items.at(-1)?.kind === 'error' ? 'model error' : 'done'
+  return 'waiting on the model'
+}
+
+// The state line: a finished run's state, or a live one's activity, a spinner frame per second,
+// and stalled once nothing new was logged for STALL_MS. `since` stands in before the first entry.
+export const activity = (live: boolean, state: string, model: string, seg: Segment | undefined, since: number, now: number) => {
+  const last = seg && !Number.isNaN(seg.last) ? seg.last : since
+  const idle = Math.max(0, now - last)
+  if (!live) return { text: state, idle, stalled: false, spin: '' }
+  const stalled = idle >= STALL_MS
+  const text = `${state === 'fell back' ? `fell back to ${model} · ` : ''}${doing(seg)}${stalled ? ' · stalled' : ''}`
+  return { text, idle, stalled, spin: stalled ? '!' : SPIN[Math.floor(now / 1000) % SPIN.length]! }
 }

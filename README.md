@@ -82,3 +82,5 @@ Third-party skills are pinned as git submodules in `vendor/` (updates only when 
 
 `git submodule update --init`, then `contrib/link-skills` links them (and this repo's `knowledge-base`, `handoff` and `design-walkthrough`) into `~/.codex/skills` and `~/.claude/skills`.
 
+`contrib/claude/agents` holds Claude Code agent types; link it as `~/.claude/agents`. `long-runner` is a general-purpose agent with a 1-hour prompt cache, for subagents that wait on commands over 5 minutes.
+

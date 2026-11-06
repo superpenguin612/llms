@@ -1,7 +1,23 @@
 import type { On } from 'claude-code'
 import { expect, test } from 'claude-code/testing'
 
-import { activity, fold, parseSession, pending, plain, segmentOf, sum, type RunRecord, type Segment } from './delegate'
+import {
+  MODELS,
+  activity,
+  bandOrder,
+  fold,
+  look,
+  parseSession,
+  pending,
+  plain,
+  rowLine,
+  segmentOf,
+  shortModel,
+  sum,
+  widths,
+  type RunRecord,
+  type Segment,
+} from './delegate'
 import { ERROR_SESSION, OK_SESSION } from './fixture'
 
 const R = '/h/.local/share/delegate/runs'
@@ -119,6 +135,75 @@ test('output past six lines folds', () => {
   expect(fold(text, false)).toEqual({ shown: 'a\nb\nc\nd\ne\nf', hidden: 2 })
   expect(fold(text, true)).toEqual({ shown: 'a\nb\nc\nd\ne\nf\ng\nh', hidden: 0 })
   expect(fold('a\nb', false).hidden).toBe(0)
+})
+
+test('short model names shrink the ones the panel knows', () => {
+  expect(shortModel('deepseek-v4.1-flash')).toBe('ds-flash')
+  expect(shortModel('kimi-k2.7-code')).toBe('kimi-code')
+  expect(shortModel('glm-5.3-flash')).toBe('glm-flash')
+  expect(shortModel('claude-haiku-5-5')).toBe('haiku')
+  expect(shortModel('mimo-v2.6-flash')).toBe('mimo-flash')
+  expect(shortModel('some-other-model')).toBe('some-other-model')
+  expect(Object.keys(MODELS)).toHaveLength(5)
+})
+
+test('a run looks live, stalled, fell back or finished', () => {
+  expect(look('running', true, false, '⠋')).toEqual({ icon: '⠋', color: 'suggestion', word: 'running' })
+  expect(look('fell back', true, false, '⠙')).toEqual({ icon: '⠙', color: 'warning', word: 'fell back' })
+  expect(look('fell back', true, true, '!')).toEqual({ icon: '⚠', color: 'warning', word: 'stalled' })
+  expect(look('done', false, false, '')).toEqual({ icon: '✓', color: 'success', word: 'review' })
+  expect(look('ok', false, false, '')).toEqual({ icon: '✓', color: 'success', word: 'review' })
+  for (const state of ['timed out', 'failed', 'api error', 'killed', 'blocked', 'stopped'])
+    expect(look(state, false, false, '')).toEqual({ icon: '✗', color: 'error', word: state })
+  expect(look('needs review', false, false, '')).toEqual({ icon: '✓', color: 'success', word: 'needs review' })
+  expect(look('merge blocked', false, false, '')).toEqual({ icon: '✗', color: 'error', word: 'merge blocked' })
+  expect(look('unexpected error', false, false, '')).toEqual({ icon: '✗', color: 'error', word: 'unexpected error' })
+})
+
+test('the band orders live runs oldest first, then the rest newest first', () => {
+  const rows = [
+    { live: false, rec: rec('done-old', '2026-11-04T11:00:00-0500', {}) },
+    { live: true, rec: rec('live-new', '2026-11-04T11:40:00-0500', {}) },
+    { live: false, rec: rec('done-new', '2026-11-04T12:00:00-0500', {}) },
+    { live: true, rec: rec('live-old', '2026-11-04T11:20:00-0500', {}) },
+  ]
+  expect(bandOrder(rows).map(r => r.rec.task)).toEqual(['live-old', 'live-new', 'done-new', 'done-old'])
+  expect(rows.map(r => r.rec.task)).toEqual(['done-old', 'live-new', 'done-new', 'live-old'])
+})
+
+test('a row line pads shared columns and cuts to the pane width', () => {
+  const fields = [
+    { icon: '✓', task: 'a', word: 'review', model: 'ds-flash', elapsed: '1m02s', detail: 'first' },
+    { icon: '✗', task: 'a-much-longer-task-name', word: 'timed out', model: 'kimi-code', elapsed: '4s', detail: 'second' },
+  ]
+  const w = widths(fields)
+  expect(w).toEqual({ task: 23, word: 9, model: 9, elapsed: 5 })
+  expect(rowLine(fields[0]!, 120, w)).toEqual({
+    icon: '✓',
+    task: 'a'.padEnd(23),
+    word: 'review'.padEnd(9),
+    model: 'ds-flash'.padEnd(9),
+    elapsed: '1m02s',
+    detail: 'first',
+  })
+  expect(widths([{ ...fields[0]!, task: 'x'.repeat(40) }]).task).toBe(24)
+
+  const cut = rowLine(
+    { icon: '⠋', task: 'long-task-name', word: 'running', model: 'glm-flash', elapsed: '2m10s', detail: 'a detail far too long to fit' },
+    30,
+    widths([{ task: 'long-task-name', word: 'running', model: 'glm-flash', elapsed: '2m10s' }]),
+  )
+  const joined = [cut.icon, cut.task, cut.word, cut.model, cut.elapsed, cut.detail].filter(Boolean).join(' ')
+  expect(joined).toBe('⠋ long-task-name running glm-…')
+  expect(joined.length).toBe(30)
+
+  // Never wider than the pane, even at its narrowest.
+  for (const columns of [1, 5, 10, 20]) {
+    const narrow = rowLine(fields[1]!, columns, w)
+    const text = [narrow.icon, narrow.task, narrow.word, narrow.model, narrow.elapsed, narrow.detail].filter(Boolean).join(' ')
+    expect(text.length).toBeLessThanOrEqual(columns)
+    expect(text.endsWith('…')).toBe(true)
+  }
 })
 
 test('activity: the running tool, waiting on the model, done, stalled, fell back', () => {

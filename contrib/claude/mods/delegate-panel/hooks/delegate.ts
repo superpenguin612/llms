@@ -13,6 +13,17 @@ export type RunRecord = {
   attempts: AttemptRecord[]
 }
 
+// The short names a row shows for the models delegate runs.
+export const MODELS: Record<string, string> = {
+  'deepseek-v4.1-flash': 'ds-flash',
+  'kimi-k2.7-code': 'kimi-code',
+  'glm-5.3-flash': 'glm-flash',
+  'claude-haiku-5-5': 'haiku',
+  'mimo-v2.6-flash': 'mimo-flash',
+}
+
+export const shortModel = (name: string) => MODELS[name] ?? name
+
 export type Item =
   | { kind: 'user'; text: string }
   | { kind: 'text'; text: string }
@@ -92,6 +103,80 @@ export const stateOf = (rec: RunRecord, isLive: boolean, resultStatus?: string) 
   if (isLive) return rec.attempts.some(a => a.outcome === 'timeout' || a.outcome === 'api_error') ? 'fell back' : 'running'
   if (rec.status === 'ok') return resultStatus ?? 'done'
   return FAILED[rec.status] ?? (rec.status === 'running' ? 'stopped' : rec.status)
+}
+
+const BAD = new Set(['timed out', 'failed', 'api error', 'killed', 'blocked', 'stopped'])
+
+// A run's icon, color and the word its row prints, from its state word and its activity.
+export const look = (state: string, live: boolean, stalled: boolean, spin: string) => {
+  if (live && stalled) return { icon: '⚠', color: 'warning', word: 'stalled' }
+  if (live) return { icon: spin, color: state === 'fell back' ? 'warning' : 'suggestion', word: state }
+  if (state === 'done' || state === 'ok') return { icon: '✓', color: 'success', word: 'review' }
+  if (BAD.has(state)) return { icon: '✗', color: 'error', word: state }
+  const bad = /fail|block|error/i.test(state)
+  return { icon: bad ? '✗' : '✓', color: bad ? 'error' : 'success', word: state }
+}
+
+// Live runs first, oldest first: they are what the band watches. Then the rest, newest first.
+export const bandOrder = <T extends { live: boolean; rec: Pick<RunRecord, 'started'> }>(rows: T[]): T[] =>
+  [...rows].sort((a, b) => {
+    if (a.live !== b.live) return a.live ? -1 : 1
+    const at = startedMs(a.rec.started)
+    const bt = startedMs(b.rec.started)
+    return a.live ? at - bt : bt - at
+  })
+
+export type RowFields = { icon: string; task: string; word: string; model: string; elapsed: string; detail?: string }
+export type RowWidths = { task: number; word: number; model: number; elapsed: number }
+
+const longest = (values: string[]) => values.reduce((n, text) => Math.max(n, text.length), 0)
+
+// The column widths one set of rows shares: each as wide as its longest value, the task at most 24.
+export const widths = (rows: Pick<RowFields, 'task' | 'word' | 'model' | 'elapsed'>[]): RowWidths => ({
+  task: Math.min(longest(rows.map(r => r.task)), 24),
+  word: longest(rows.map(r => r.word)),
+  model: longest(rows.map(r => r.model)),
+  elapsed: longest(rows.map(r => r.elapsed)),
+})
+
+const pad = (text: string, width: number) =>
+  text.length > width ? `${text.slice(0, Math.max(0, width - 1))}…` : text.padEnd(width)
+
+const LINE = ['icon', 'task', 'word', 'model', 'elapsed', 'detail'] as const
+const BLANK: Required<RowFields> = { icon: '', task: '', word: '', model: '', elapsed: '', detail: '' }
+
+// `{icon} {task} {word} {model} {elapsed} {detail}` padded to the shared widths and cut to the
+// pane's columns with a trailing ellipsis; the pieces stay apart so a caller colors the icon and word.
+export const rowLine = (fields: RowFields, columns: number, w: RowWidths = widths([fields])): Required<RowFields> => {
+  if (columns <= 0) return { ...BLANK }
+  const parts: Required<RowFields> = {
+    icon: fields.icon,
+    task: pad(fields.task, w.task),
+    word: pad(fields.word, w.word),
+    model: pad(fields.model, w.model),
+    elapsed: pad(fields.elapsed, w.elapsed),
+    detail: fields.detail ?? '',
+  }
+  const starts: number[] = []
+  let line = ''
+  for (const key of LINE) {
+    if (!parts[key]) continue
+    if (line) line += ' '
+    starts.push(line.length)
+    line += parts[key]
+  }
+  if (line.length <= columns) return parts
+  const used = LINE.filter(key => parts[key])
+  const shown = line.slice(0, columns - 1)
+  const cut: Required<RowFields> = { ...BLANK }
+  used.forEach((key, i) => {
+    const from = starts[i]!
+    const to = i + 1 < starts.length ? starts[i + 1]! - 1 : shown.length
+    cut[key] = shown.slice(from, Math.max(from, to))
+  })
+  const last = [...used].reverse().find(key => cut[key] !== '') ?? used[0]
+  if (last) cut[last] += '…'
+  return cut
 }
 
 export const duration = (seconds: number) => {

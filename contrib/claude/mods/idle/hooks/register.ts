@@ -1,5 +1,5 @@
 import { atom, read, update } from 'claude-code'
-import type { EngineInterface, Register, Timer } from 'claude-code'
+import type { EngineInterface, Register, SessionCompactResult, Timer } from 'claude-code'
 
 import type { Away } from '../types'
 
@@ -19,10 +19,41 @@ const away = atom({ plugin: 'idle', key: 'away' } as const, {} as Away, { shape:
 
 let ping: Timer | undefined
 let lastTurnEnd: number | undefined
+let prompt: string | undefined
 
 const hhmm = (ms: number) => {
   const at = new Date(ms)
   return `${String(at.getHours()).padStart(2, '0')}:${String(at.getMinutes()).padStart(2, '0')}`
+}
+
+const stamp = (ms: number) => {
+  const at = new Date(ms)
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${at.getFullYear()}${pad(at.getMonth() + 1)}${pad(at.getDate())}-${pad(at.getHours())}${pad(at.getMinutes())}${pad(at.getSeconds())}`
+}
+
+const slug = (cwd: string) => cwd.replace(/^\//, '').replace(/\//g, '-')
+
+const withPerson = (text: string, own: string) =>
+  own === '' ? text : `The user asked to keep or stress: ${own}\n\n${text}`
+
+async function summaryPrompt($: $) {
+  prompt ??= await $.fs.read(`${$.plugin.root}/hooks/summary-prompt.md`)
+  return prompt
+}
+
+async function saveSummary($: $, text: string) {
+  const home = await $.env.get('HOME')
+  if (!home) return
+  const now = await $.clock.now()
+  const cwd = await $.session.cwd()
+  await $.fs.write(`${home}${COMPACTIONS}/${stamp(now)}-${slug(cwd)}.md`, text)
+  $.ui.status(`compacted at ${hhmm(now)}`)
+}
+
+async function saveCompacted($: $, result: SessionCompactResult) {
+  const summary = result.messages?.[0]?.text
+  if (summary !== undefined) await saveSummary($, summary)
 }
 
 export function isStale(mtimeMs: number, now: number) {
@@ -102,7 +133,19 @@ export const register: Register = on => {
     return next(e)
   })
 
-  // Any prompt that is not this mod's own ping means the person is back.
+  on('session.compact', async ($, e, next) => {
+    if (e.agentId !== undefined) return next(e)
+    if (e.trigger === 'precompute') return next(e)
+
+    const text = await summaryPrompt($)
+    const own = e.instructions?.trim() ?? ''
+    const r = await next({ ...e, instructions: withPerson(text, own) })
+    await saveCompacted($, r)
+    return r
+  })
+
+  // Any prompt that is not this mod's own ping means the person is back: it
+  // cancels away and clears the compaction status.
   on('prompt.submit', async ($, e, next) => {
     if (!(e.origin?.kind === 'plugin' && e.origin.name === 'idle')) await clearAway($)
     return next(e)

@@ -153,6 +153,18 @@ test('live first, then finished and failed newest first, with their icons', asyn
   await ui.unmount()
 })
 
+test('a band row leaves room for its hotkey', async ($, on) => {
+  const long = 'A result line long enough that the band has to cut it somewhere.'
+  records = { 'ok-long': finished('ok-long', OLDER, long) }
+  extraFiles = { [`${R}/ok-long/result.md`]: resultMd('done', long) }
+  seed(on)
+  const ui = await $.ui.mount(BAND({ ...BAND_PROPS, bodyColumns: 40 }))
+  const row = await ui.find({ key: 'band-ok-long' })
+  expect(row?.text.length).toBeLessThanOrEqual(37)
+  expect(row?.text.endsWith('…')).toBe(true)
+  await ui.unmount()
+})
+
 test('seven runs leave five rows and a more line', async ($, on) => {
   records = {
     'live-a': rec('live-a', LIVE, { status: 'running' }),

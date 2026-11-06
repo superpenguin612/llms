@@ -61,7 +61,7 @@ const registerBand: Register = on => {
               elapsed: duration(row.elapsed),
               detail: row.live ? row.act.text : (row.result ?? ''),
             },
-            e.props.bodyColumns,
+            e.props.bodyColumns - (String(i + 1).length + 2),
             w,
           )
           // The pieces grouped the way they are colored; joined they are the line as cut.

@@ -16,7 +16,11 @@ Include, in this order, with these headings:
 - **Constraints kept:** rules the user stated or the session relied on.
 
 Point to commits, design docs, diffs and issues by path or URL instead of restating them. Keep
-exact error messages, commands, ids and numbers that the next steps depend on. Leave out secrets,
+exact error messages, commands, ids and numbers that the next steps depend on, and every exact
+identifier the work touched: hostnames, IP addresses, ports, versions, commit hashes, PR and issue
+numbers, paths. Keep lessons learned: what went wrong, what fixed it, and the rule to follow next
+time. Keep the caveats and warnings given to the user with their specifics (which commands, which
+versions, what to test), and the user's options as they were put to them. Leave out secrets,
 keys and passwords.
 
 Length: as long as it needs to be, usually 3-8k tokens. Never drop a decision, a user

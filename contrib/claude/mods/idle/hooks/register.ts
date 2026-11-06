@@ -286,6 +286,9 @@ export const register: Register = (on, options) => {
   // clears the compaction status, but leaves the window and its timer alone.
   on('prompt.submit', async ($, e, next) => {
     if (!(e.origin?.kind === 'plugin' && e.origin.name === 'idle')) {
+      // Your turn's end re-arms the ping; a ping firing mid-turn would pass your turn off as its own.
+      ping?.cancel()
+      ping = undefined
       const now = await $.clock.now()
       const { awayUntil } = await read($, away)
       $.ui.status(awayUntil !== undefined && awayUntil > now ? `warm until ${hhmm(awayUntil)}` : undefined)

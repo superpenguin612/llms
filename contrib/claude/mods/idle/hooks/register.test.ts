@@ -210,6 +210,19 @@ test("/away 5 keeps its window through a person's prompt and restarts it after t
   expect(submitted.filter(text => text === KEEPALIVE)).toHaveLength(1)
 })
 
+test('a long turn of yours past the ping time still restarts the window', async ($, on) => {
+  const { clock, statuses, submitted } = seed(on, [], 60_000)
+  await start($)
+  await turn($)
+
+  await clock.advance(40 * 60 * 1000)
+  await $.prompt.submit({ text: 'a long task' })
+  await clock.advance(20 * 60 * 1000)
+  expect(submitted.filter(text => text === KEEPALIVE)).toHaveLength(0)
+  await turn($)
+  expect(statuses.at(-1)).toBe(`warm until ${hhmm(NOW + 60 * 60 * 1000 + 2 * 60 * 60 * 1000)}`)
+})
+
 test('/away typed after a turn pings 50 min after that turn, not after the command', async ($, on) => {
   const { clock, submitted } = seed(on)
   await start($)

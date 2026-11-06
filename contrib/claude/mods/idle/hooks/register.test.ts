@@ -191,6 +191,19 @@ test("a person's prompt cancels the ping", async ($, on) => {
   expect(submitted).toEqual(['I am back'])
 })
 
+test('/away typed after a turn pings 50 min after that turn, not after the command', async ($, on) => {
+  const { clock, submitted } = seed(on)
+  await start($)
+  await turn($)
+
+  await clock.advance(30 * 60 * 1000)
+  await $.prompt.submit({ text: '/away 2' })
+  await $.command.run({ command: 'away', args: '2' })
+
+  await clock.advance(20 * 60 * 1000)
+  expect(submitted.filter(text => text === KEEPALIVE)).toHaveLength(1)
+})
+
 test('/away off cancels', async ($, on) => {
   const { clock, statuses, submitted } = seed(on)
   await start($)

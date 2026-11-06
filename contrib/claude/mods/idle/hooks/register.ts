@@ -101,7 +101,8 @@ async function pruneCompactions($: $) {
 async function clearAway($: $) {
   ping?.cancel()
   ping = undefined
-  await update($, away, (s) => (s.off === true ? { off: true } : {}))
+  // Keep what outlives a window: the opt-out, and when the last request ended (the cache's clock).
+  await update($, away, (s) => ({ off: s.off, lastTurnEnd: s.lastTurnEnd }))
   $.ui.status(undefined)
 }
 

@@ -2,15 +2,20 @@ import type { Register } from 'claude-code'
 
 import {
   type Item,
+  type RowFields,
   type Usage,
+  bandOrder,
   duration,
   fitTail,
   fold,
+  look,
   parseSession,
   pending,
+  rowLine,
   segmentOf,
-  sum,
+  shortModel,
   totalTokens,
+  widths,
 } from './delegate'
 import {
   PANE,
@@ -35,6 +40,17 @@ const tokens = (u: Usage) =>
   `in ${count(u.input)} · out ${count(u.output)} · cache read ${count(u.cache_read)} · cache write ${count(u.cache_write)} · total ${count(totalTokens(u))} · ${money(u.cost)}`
 const tokLine = (u: Usage) => `${count(totalTokens(u))} tok ${money(u.cost)}`
 const ago = (ms: number) => `last activity ${duration(ms / 1000)} ago`
+
+const CELLS = ['icon', 'task', 'word', 'model', 'elapsed', 'detail'] as const
+
+const fieldsOf = (row: Row, lk: ReturnType<typeof look>): RowFields => ({
+  icon: lk.icon,
+  task: row.rec.task,
+  word: lk.word,
+  model: shortModel(row.model),
+  elapsed: duration(row.elapsed),
+  detail: row.live ? row.act.text : row.result,
+})
 
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
@@ -64,54 +80,75 @@ export const register: Register = on => {
   })
 
   on('ui.render', { component: 'Pane', requestId: 'delegate' }, async ($, e) => {
-    const { Box, Text, Button } = $.ui.resolve(e)
+    const { Box, Text, Button, Markdown } = $.ui.resolve(e)
     const now = await $.clock.now()
     const records = await loadRecords($)
     const at = await readView($)
     const rec = records.find(r => r.task === at.task)
-
-    // A live run's activity with its spinner, warning-colored once stalled; a finished run's state.
-    const state = (row: Row) => (
-      <Text color={row.act.stalled ? 'warning' : row.live ? 'success' : 'subtle'}>
-        {row.act.spin && `${row.act.spin} `}
-        {row.act.text}
-      </Text>
-    )
+    const columns = e.props.bodyColumns
 
     if (!rec) {
       const rows = await Promise.all(pending(records).map(r => rowOf($, r, now)))
+      const cells = bandOrder(rows).map(row => {
+        const lk = look(row.state, row.live, row.act.stalled, row.act.spin)
+        return { row, lk, fields: fieldsOf(row, lk) }
+      })
+      const w = widths(cells.map(c => c.fields))
+      const running = cells.filter(c => c.row.live).length
+      const review = cells.filter(c => !c.row.live && c.lk.word === 'review').length
+      const counts = [running > 0 ? `${running} running` : '', review > 0 ? `${review} to review` : ''].filter(Boolean)
+
       return (
         <Box flexDirection="column">
-          {rows.length === 0 && <Text dimColor>No live or uncleaned delegate runs.</Text>}
-          {rows.map(row => (
-            <Box key={`row-${row.rec.task}`} flexDirection="column" marginBottom={1}>
-              <Button
-                key={`open-${row.rec.task}`}
-                plain
-                onPress={async () => {
-                  await writeView($, () => ({ task: row.rec.task }))
-                  await follow($)
-                }}
-              >
-                {row.rec.task} {state(row)} <Text dimColor>
-                  {row.model} · {duration(row.elapsed)}
-                </Text>
-              </Button>
-              <Text dimColor>
-                {tokLine(row.total)}
-                {row.live ? ` · ${ago(row.act.idle)}` : ''}
-              </Text>
-              {row.result && <Text dimColor wrap="truncate-end">{row.result}</Text>}
-            </Box>
-          ))}
-          <Button key="close" hotkey="q" plain dimColor onPress={() => $.ui.close({ id: PANE })}>
-            close
-          </Button>
+          <Box flexDirection="row">
+            <Text bold>Delegate</Text>
+            {counts.length > 0 && <Text dimColor> · {counts.join(' · ')}</Text>}
+          </Box>
+          {cells.length === 0 && <Text dimColor>No live or uncleaned delegate runs.</Text>}
+          {cells.map(({ row, lk, fields }) => {
+            const line = rowLine(fields, columns, w)
+            return (
+              <Box key={`row-${row.rec.task}`} flexDirection="column">
+                <Button
+                  key={`open-${row.rec.task}`}
+                  plain
+                  onPress={async () => {
+                    await writeView($, () => ({ task: row.rec.task }))
+                    await follow($)
+                  }}
+                >
+                  {CELLS.filter(key => line[key] !== '').map((key, i) => (
+                    <Text
+                      key={key}
+                      color={key === 'icon' || key === 'word' ? lk.color : undefined}
+                      dimColor={key === 'model' || key === 'elapsed' || key === 'detail'}
+                    >
+                      {i > 0 ? ' ' : ''}
+                      {line[key]}
+                    </Text>
+                  ))}
+                </Button>
+                <Box paddingLeft={2}>
+                  <Text dimColor>
+                    {tokLine(row.total)}
+                    {row.live ? ` · ${ago(row.act.idle)}` : ''}
+                  </Text>
+                </Box>
+              </Box>
+            )
+          })}
+          <Box flexDirection="row">
+            <Text dimColor>↑↓ select · enter open · </Text>
+            <Button key="close" hotkey="q" plain dimColor onPress={() => $.ui.close({ id: PANE })}>
+              close
+            </Button>
+          </Box>
         </Box>
       )
     }
 
     const row = await rowOf($, rec, now)
+    const lk = look(row.state, row.live, row.act.stalled, row.act.spin)
     const attempts = row.attempts
     const index = Math.min(at.attempt ?? attempts.length - 1, attempts.length - 1)
     const attempt = attempts[index]
@@ -138,13 +175,13 @@ export const register: Register = on => {
             <Text color="suggestion" bold>
               {isFirst ? 'brief' : 'feedback'}
             </Text>
-            <Text>{item.text.trim()}</Text>
+            <Markdown text={item.text.trim()} />
           </Box>
         )
       if (item.kind === 'text')
         return (
           <Box key={`item-${i}`} marginBottom={1}>
-            <Text>{item.text}</Text>
+            <Markdown text={item.text} />
           </Box>
         )
       if (item.kind === 'error')
@@ -185,31 +222,19 @@ export const register: Register = on => {
 
     return (
       <Box flexDirection="column">
-        <Box flexDirection="row" gap={1}>
-          <Button key="back" hotkey="b" onPress={back}>
-            ← all runs (b)
-          </Button>
+        <Box flexDirection="row">
+          <Text color={lk.color}>{lk.icon}</Text>
+          <Text dimColor> · </Text>
           <Text bold>{rec.task}</Text>
-          <Text dimColor>{duration(row.elapsed)}</Text>
-        </Box>
-        <Text>
-          {state(row)}
-          <Text dimColor>{row.live ? ` · ${ago(row.act.idle)}` : ''}</Text>
-        </Text>
-        <Box flexDirection="row" gap={1}>
-          <Button key="end" hotkey="e" onPress={() => follow($)}>
-            ↓ jump to end (e)
-          </Button>
           <Text dimColor>
-            {isFollowing ? 'following' : 'paused'} · attempt {tokLine(usage ?? sum([]))} · run {tokLine(row.total)}
+            {' '}
+            · {attempt?.model ?? row.model} · attempt {index + 1}/{Math.max(attempts.length, 1)} · {duration(row.elapsed)} · run{' '}
+            {tokLine(row.total)}
           </Text>
         </Box>
-        <Text>
-          {attempt?.model ?? row.model} · attempt {index + 1}/{Math.max(attempts.length, 1)}
-          {attempt ? ` (${attempt.outcome})` : ''}
+        <Text dimColor>
+          {usage ? `attempt: ${tokens(usage)} · ` : ''}run: {tokens(row.total)}
         </Text>
-        {usage && <Text dimColor>attempt: {tokens(usage)}</Text>}
-        <Text dimColor>run: {tokens(row.total)}</Text>
         {attempts.length > 1 && (
           <Box flexDirection="row" flexWrap="wrap" columnGap={1}>
             {attempts.map((a, i) => (
@@ -236,26 +261,23 @@ export const register: Register = on => {
             <Text color="suggestion" bold>
               result.md
             </Text>
-            <Text>{row.resultMd.trim()}</Text>
+            <Markdown text={row.resultMd.trim()} />
           </Box>
         )}
-        {/* Following keeps the view at its end, so its state and the way back are repeated here. */}
-        <Box key="status-end" flexDirection="column" marginTop={1}>
-          <Text dimColor>{'─'.repeat(40)}</Text>
-          <Text>
-            {state(row)}
-            <Text dimColor>{row.live ? ` · ${ago(row.act.idle)}` : ''}</Text>
-          </Text>
-          <Text dimColor>
-            {isFollowing ? 'following' : 'paused'} · attempt {tokLine(usage ?? sum([]))} · run {tokLine(row.total)}
-          </Text>
-        </Box>
-        <Box flexDirection="row" gap={2}>
-          <Button key="back-end" onPress={back}>
-            ← all runs (b)
+        {/* Following keeps the view at its end, so its state and the way back stay at the bottom. */}
+        <Box key="status-end" flexDirection="row">
+          <Text color={lk.color}>{lk.word}</Text>
+          <Text dimColor> · {isFollowing ? 'following' : 'paused'} · </Text>
+          <Button key="back" hotkey="b" plain dimColor onPress={back}>
+            back
           </Button>
+          <Text dimColor> · </Text>
+          <Button key="follow" hotkey="e" plain dimColor onPress={() => follow($)}>
+            follow
+          </Button>
+          <Text dimColor> · </Text>
           <Button key="close" hotkey="q" plain dimColor onPress={() => $.ui.close({ id: PANE })}>
-            close (q)
+            close
           </Button>
         </Box>
       </Box>

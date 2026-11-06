@@ -237,39 +237,81 @@ for (const surface of ['terminal', 'desktop'] as const) {
     seed(on)
     const ui = await $.ui.mount({ ...PANE, surface })
 
+    // The header and one plain row per run, live first, then newest: rowLine keeps them aligned.
+    expect(await ui.find({ type: 'Text', text: 'Delegate' })).toMatchObject({ props: { bold: true } })
+    expect(await ui.find({ type: 'Text', text: /1 running · 1 to review/ })).toMatchObject({ props: { dimColor: true } })
     const rows = await ui.findAll({ type: 'Button' })
     expect(rows.map(b => b.key)).toEqual(['open-live-b', 'open-done-a', 'close'])
-    expect((await ui.find({ key: 'open-live-b' }))?.text).toMatch(/live-b \S fell back to m2 · running bash: pwd .* m2 · 1m30s/)
-    expect((await ui.find({ key: 'open-done-a' }))?.text).toMatch(/done-a done deepseek · 48s/)
-    expect(await ui.find({ type: 'Text', text: 'Added hello.txt and bye.txt.' })).toBeDefined()
-    // Running tokens and cost per row: live-b's recorded attempt (6) plus its live log so far (2367).
-    expect(await ui.find({ type: 'Text', text: /^2.4k tok \$0\.0014 · last activity 10s ago$/ })).toBeDefined()
+    expect(rows[0]?.props.plain).toBe(true)
+    expect(rows[0]?.text).toMatch(/^\S live-b\s+fell back\s+m2\s+1m30s\s+fell back to m2/)
+    expect(rows[1]?.text).toMatch(/^\S done-a\s+review\s+deepseek\s+48s\s+Added hello\.txt/)
+    for (const row of rows.slice(0, 2)) expect(row.text.length).toBeLessThanOrEqual(60)
+    expect((await ui.find({ key: 'row-live-b' }))?.props.marginBottom).toBeUndefined()
+    expect((await ui.find({ key: 'row-done-a' }))?.props.marginBottom).toBeUndefined()
+
+    // Icons and words take look()'s color; model, elapsed and detail stay dim.
+    const listed = await ui.findAll({ type: 'Text' })
+    const spin = activity(true, 'fell back', 'm2', parseSession(PARTIAL)[0], 0, NOW).spin
+    const icons = listed.filter(t => [spin, '✓'].includes(t.text.trim()))
+    expect(icons.map(t => t.text.trim())).toEqual([spin, '✓'])
+    expect(icons.map(t => t.props.color)).toEqual(['warning', 'success'])
+    expect(listed.find(t => t.text.trim() === 'fell back')?.props.color).toBe('warning')
+    expect(listed.find(t => t.text.trim() === 'review')?.props.color).toBe('success')
+    for (const dim of ['m2', 'deepseek', '1m30s', '48s']) expect(listed.find(t => t.text.trim() === dim)?.props.dimColor).toBe(true)
+    expect(listed.find(t => t.text.trim().startsWith('Added hello.txt'))?.props.dimColor).toBe(true)
+
+    // Running tokens and cost under each row: live-b's recorded attempt (6) plus its log so far (2367).
+    expect(await ui.find({ type: 'Text', text: /^2\.4k tok \$0\.0014 · last activity 10s ago$/ })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: /^18 tok \$0\.0030$/ })).toBeDefined()
+    // One dim footer line; the last Button is the q hotkey, not a bracketed control.
+    expect(await ui.find({ type: 'Text', text: /↑↓ select · enter open ·/ })).toMatchObject({ props: { dimColor: true } })
+    expect(rows.at(-1)?.props).toMatchObject({ hotkey: 'q', plain: true, dimColor: true })
+    expect(await ui.find({ type: 'Text', text: /─/ })).toBeUndefined()
 
     // Opens on the latest attempt: the retry's segment of the shared log.
     await ui.press({ key: 'open-done-a' })
-    // The jump control sits at the top, right under the header, and opening scrolled to the end.
-    const keys = (await ui.findAll({ type: 'Button' })).map(b => b.key)
-    expect(keys.slice(0, 2)).toEqual(['back', 'end'])
-    // The way back is repeated at the bottom, where following leaves the view.
-    expect(keys.slice(-2)).toEqual(['back-end', 'close'])
-    expect((await ui.find({ key: 'end' }))?.text).toBe('↓ jump to end (e)')
     // The kit has no scroller, so the plugin's scroll rejects; that it was asked shows on the status line.
     expect(statuses).toEqual(['delegate: jump to end failed: HooksError: no implementation for ui.scroll'])
-    // The state and token line show at the top and again in the bottom status line.
-    expect((await ui.findAll({ type: 'Text', text: /^following · attempt 6 tok/ })).length).toBe(2)
-    // result.md in full at the end.
+
+    // One title line, one dim token line, and the b/e/q controls only in the footer.
+    expect((await ui.find({ type: 'Text', text: 'done-a' }))?.props.bold).toBe(true)
+    expect(await ui.find({ type: 'Text', text: /deepseek · attempt 3\/3 · 48s · run 18 tok \$0\.0030/ })).toMatchObject({
+      props: { dimColor: true },
+    })
+    expect(await ui.find({ type: 'Text', text: /^attempt: .*total 6.* · run: .*total 18/ })).toMatchObject({
+      props: { dimColor: true },
+    })
+    expect((await ui.find({ type: 'Text', text: '✓' }))?.props.color).toBe('success')
+    expect((await ui.find({ type: 'Text', text: 'review' }))?.props.color).toBe('success')
+    expect(await ui.find({ type: 'Text', text: / · following · / })).toMatchObject({ props: { dimColor: true } })
+
+    const keys = (await ui.findAll({ type: 'Button' })).map(b => b.key)
+    expect(keys.slice(0, 3)).toEqual(['attempt-0', 'attempt-1', 'attempt-2'])
+    expect(keys.slice(-3)).toEqual(['back', 'follow', 'close'])
+    expect(
+      (await ui.findAll({ type: 'Button' })).slice(-3).map(b => [b.key, b.props.hotkey, b.props.plain, b.props.dimColor]),
+    ).toEqual([
+      ['back', 'b', true, true],
+      ['follow', 'e', true, true],
+      ['close', 'q', true, true],
+    ])
+    expect(await ui.find({ key: 'back-end' })).toBeUndefined()
+
+    // result.md and the transcript's prose are Markdown leaves, each under its small label.
     expect(await ui.find({ type: 'Text', text: 'result.md' })).toBeDefined()
-    expect(await ui.find({ type: 'Text', text: /## Status\ndone\n\n## Summary\nAdded hello/ })).toBeDefined()
+    expect(await ui.find({ type: 'Markdown', text: /## Status\ndone\n\n## Summary\nAdded hello/ })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: 'feedback' })).toBeDefined()
-    expect(await ui.find({ type: 'Text', text: /attempt 3\/3/ })).toBeDefined()
 
     await ui.press({ key: 'attempt-0' })
-    expect(await ui.find({ type: 'Text', text: /Model is unavailable/ })).toBeDefined()
-    expect(await ui.find({ type: 'Text', text: /attempt 1\/3 \(api_error\)/ })).toBeDefined()
+    expect((await ui.find({ type: 'Text', text: /Model is unavailable/ }))?.props.color).toBe('error')
+    expect(await ui.find({ type: 'Text', text: /does-not-exist · attempt 1\/3 · 48s/ })).toBeDefined()
 
     await ui.press({ key: 'attempt-1' })
     expect(await ui.find({ type: 'Text', text: 'brief' })).toBeDefined()
+    expect(await ui.find({ type: 'Markdown', text: /# Goal\nAdd a file/ })).toBeDefined()
+    expect(await ui.find({ type: 'Markdown', text: /Done\./ })).toBeDefined()
+    const toolName = (await ui.findAll({ type: 'Text' })).find(t => t.text.trim() === 'bash')
+    expect(toolName?.props).toMatchObject({ color: 'warning', bold: true })
     const fold1 = (await ui.findAll({ type: 'Button' })).find(b => b.key?.startsWith('fold-'))
     expect(fold1?.text).toBe('… 1 more lines')
     expect(await ui.find({ type: 'Text', text: /c1da6e4 smoke: init/ })).toBeUndefined()
@@ -278,13 +320,16 @@ for (const surface of ['terminal', 'desktop'] as const) {
     expect((await ui.find({ key: fold1!.key! }))?.text).toBe('fold')
 
     // The live run's current attempt reads the newest log no attempt owns yet.
-    await ui.press({ key: 'back-end' })
+    await ui.press({ key: 'back' })
+    expect(await ui.find({ type: 'Text', text: 'Delegate' })).toBeDefined()
     await ui.press({ key: 'open-live-b' })
-    expect(await ui.find({ type: 'Text', text: /m2 · attempt 2\/2 \(running\)/ })).toBeDefined()
-    expect(await ui.find({ type: 'Text', text: /fell back to m2 · running bash: pwd/ })).toBeDefined()
-    expect(await ui.find({ type: 'Text', text: /last activity 10s ago/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /m2 · attempt 2\/2 · 1m30s · run 2\.4k tok \$0\.0014/ })).toBeDefined()
+    expect(await ui.find({ type: 'Markdown', text: /# Goal\nAdd a file/ })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: /… running 10s/ })).toBeDefined()
-    expect(await ui.find({ type: 'Text', text: /^attempt: in 2.0k · out 134 · cache read 256 · cache write 0 · total 2.4k/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /^attempt: in 2\.0k · out 134 · cache read 256 · cache write 0 · total 2\.4k.* · run: .*total 2\.4k/ })).toBeDefined()
+    expect((await ui.find({ type: 'Text', text: 'fell back' }))?.props.color).toBe('warning')
+    await ui.press({ key: 'follow' })
+    expect(statuses.at(-1)).toMatch(/no implementation for ui.scroll/)
     await ui.unmount()
   })
 }

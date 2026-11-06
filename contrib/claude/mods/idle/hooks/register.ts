@@ -29,7 +29,8 @@ let prompt: string | undefined
 
 const hhmm = (ms: number) => {
   const at = new Date(ms)
-  return `${String(at.getHours()).padStart(2, '0')}:${String(at.getMinutes()).padStart(2, '0')}`
+  const h = at.getHours()
+  return `${h % 12 || 12}:${String(at.getMinutes()).padStart(2, '0')} ${h < 12 ? 'AM' : 'PM'}`
 }
 
 const thousands = (n: number | undefined) => ((n ?? 0) / 1000).toFixed(1)
@@ -108,7 +109,6 @@ async function clearAway($: $) {
   ping = undefined
   // Keep what outlives a window: the setting, the opt-out, and when the last request ended (the cache's clock).
   await update($, away, (s) => ({ off: s.off, hours: s.hours, lastTurnEnd: s.lastTurnEnd }))
-  $.ui.status(undefined)
 }
 
 const contextTokens = async ($: $) => (await $.session.usage()).context.tokens ?? 0
@@ -142,7 +142,6 @@ export const register: Register = (on, options) => {
     const now = await $.clock.now()
     const { awayUntil, lastTurnEnd } = await read($, away)
     if (awayUntil !== undefined && awayUntil > now) {
-      $.ui.status(`warm until ${hhmm(awayUntil)}`)
       await arm($, awayUntil, lastTurnEnd ?? now)
     } else if (awayUntil !== undefined) {
       await clearAway($)
@@ -190,7 +189,6 @@ export const register: Register = (on, options) => {
       hours,
       off: undefined,
     }))
-    $.ui.status(`warm until ${hhmm(until)}`)
     await arm($, until, lastTurnEnd ?? now)
     return {
       text: `This session stays warm ${hours} h after each of your turns (now until ${hhmm(until)}).`,
@@ -221,7 +219,6 @@ export const register: Register = (on, options) => {
       } else {
         const until = now + length
         await update($, away, (s) => ({ ...s, awayUntil: until }))
-        $.ui.status(`warm until ${hhmm(until)}`)
         await arm($, until, now)
       }
     }
@@ -289,10 +286,16 @@ export const register: Register = (on, options) => {
       // Your turn's end re-arms the ping; a ping firing mid-turn would pass your turn off as its own.
       ping?.cancel()
       ping = undefined
-      const now = await $.clock.now()
-      const { awayUntil } = await read($, away)
-      $.ui.status(awayUntil !== undefined && awayUntil > now ? `warm until ${hhmm(awayUntil)}` : undefined)
+      $.ui.status(undefined)
     }
     return next(e)
+  })
+
+  // A dim footer label, not the pinned status line (that one reads as a warning); it redraws when `away` changes.
+  on('ui.render', { component: 'SessionMode' }, async ($, e, next) => {
+    const { awayUntil, hours } = await read($, away)
+    if (awayUntil === undefined || awayUntil <= (await $.clock.now())) return next(e)
+    const label = `warm until ${hhmm(awayUntil)} (${hours ?? WARM_MS / HOUR_MS}hr)`
+    return next({ ...e, props: { ...e.props, modes: [...e.props.modes, label] } })
   })
 }

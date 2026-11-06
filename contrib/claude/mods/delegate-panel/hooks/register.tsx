@@ -1,122 +1,33 @@
-import { atom, read, update } from 'claude-code'
-import type { EngineInterface, Register } from 'claude-code'
+import type { Register } from 'claude-code'
 
-import type { View } from '../types'
 import {
-  type AttemptRecord,
   type Item,
-  type RunRecord,
-  type Segment,
   type Usage,
-  activity,
   duration,
   fitTail,
   fold,
-  parseRecords,
   parseSession,
   pending,
-  plain,
-  resultInfo,
   segmentOf,
-  stateOf,
   sum,
   totalTokens,
 } from './delegate'
-
-const PANE = 'delegate'
-const TITLE = 'Delegate'
-const READ_CAP = 4 * 1024 * 1024 // $.fs.read rejects past 4 MiB
-
-const view = atom({ plugin: 'delegate-panel', key: 'view' } as const, {} as View, { shape: 'view-1' })
-const expanded = atom({ plugin: 'delegate-panel', key: 'expanded' } as const, [] as string[], { shape: 'expanded-1' })
-// Whether the session view stays at its end: the person scrolling up stops it, back to the end resumes.
-const following = atom({ plugin: 'delegate-panel', key: 'following' } as const, true, { shape: 'following-1' })
-
-type $ = EngineInterface
-
-const readText = ($: $, path: string) => $.fs.read(path).then(t => plain(t as string), () => undefined)
-
-// shortcut: a log past the 4 MiB read cap shows its last ~4 MiB only (read through `tail`), so a
-// retry's segment can be misnumbered and early entries are gone; upgrade if workers' logs grow that large.
-const readLog = async ($: $, path: string) => {
-  const size = await $.fs.stat(path).then(s => s.size, () => -1)
-  if (size < 0) return ''
-  if (size < READ_CAP) return (await readText($, path)) ?? ''
-  const tail = await $.process.run(['tail', '-c', String(READ_CAP - 1024), path]).catch(() => undefined)
-  return plain(tail?.stdout ?? '')
-}
-
-// Live as delegate itself decides it: a `running` marker whose PID is alive (Linux /proc).
-const isLive = async ($: $, run: string) => {
-  const pid = (await readText($, `${run}/running`))?.trim()
-  return !!pid && $.fs.exists(`/proc/${pid}`)
-}
-
-// pi.log gets a `=== <model> <time>` line as each attempt starts.
-const liveModel = async ($: $, run: string) =>
-  ((await readLog($, `${run}/pi.log`)).match(/^=== (\S+)/gm)?.at(-1) ?? '=== -').slice(4)
-
-const loadRecords = async ($: $) => {
-  const home = (await $.env.get('HOME')) ?? ''
-  return parseRecords((await readText($, `${home}/.local/share/delegate/runs.jsonl`)) ?? '')
-}
-
-type Attempt = { model: string; outcome: string; session?: string | null; usage?: Usage }
-
-type Row = {
-  rec: RunRecord
-  live: boolean
-  model: string
-  elapsed: number
-  state: string
-  result?: string
-  resultMd?: string
-  attempts: Attempt[]
-  current?: Segment // the live attempt's session so far
-  act: ReturnType<typeof activity>
-  total: Usage // the whole run: recorded attempts plus the live one so far
-}
-
-// The recorded attempts, plus the one running now: its session is the newest log no attempt
-// owns yet, or, for a retry (feedback.md written), the last attempt's log, which pi appends to.
-const attemptsOf = async ($: $, run: string, done: Attempt[], model: string): Promise<Attempt[]> => {
-  const owned = new Set(done.map(a => a.session))
-  const logs = (await $.fs.list(`${run}/sessions`).catch(() => []))
-    .map(f => `${run}/sessions/${f.name}`)
-    .filter(p => p.endsWith('.jsonl') && !owned.has(p))
-    .sort()
-  const isRetry = await $.fs.exists(`${run}/feedback.md`)
-  const session = logs.at(-1) ?? (isRetry ? done.at(-1)?.session : undefined)
-  return [...done, { model, outcome: 'running', session }]
-}
-
-const rowOf = async ($: $, rec: RunRecord, now: number): Promise<Row> => {
-  const live = await isLive($, rec.run)
-  const resultMd = await readText($, `${rec.run}/result.md`)
-  const info = resultInfo(resultMd ?? '')
-  const since = live ? await $.fs.stat(`${rec.run}/running`).then(s => s.mtimeMs, () => now) : now
-  const model = live ? await liveModel($, rec.run) : (rec.attempts.at(-1)?.model ?? '-')
-  const done: Attempt[] = rec.attempts.map((a: AttemptRecord) => ({ ...a, usage: a }))
-  const attempts = live ? await attemptsOf($, rec.run, done, model) : done
-  const session = live ? attempts.at(-1)?.session : undefined
-  const current = session
-    ? segmentOf(parseSession(await readLog($, session)), attempts.map(a => a.session), attempts.length - 1)
-    : undefined
-  const state = stateOf(rec, live, info.status)
-  return {
-    rec,
-    live,
-    model,
-    elapsed: live ? (now - since) / 1000 : rec.attempts.reduce((n, a) => n + a.seconds, 0),
-    state,
-    result: info.line,
-    resultMd,
-    attempts,
-    current,
-    act: activity(live, state, model, current, since, now),
-    total: sum([...rec.attempts, ...(current ? [current.usage] : [])]),
-  }
-}
+import {
+  PANE,
+  TITLE,
+  follow,
+  loadRecords,
+  readExpanded,
+  readFollowing,
+  readLog,
+  readText,
+  readView,
+  rowOf,
+  toEnd,
+  writeExpanded,
+  writeView,
+  type Row,
+} from './rows'
 
 const money = (n: number) => `$${n.toFixed(n < 0.01 ? 4 : 2)}`
 const count = (n: number) => (n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${(n / 1e3).toFixed(1)}k` : String(n))
@@ -124,18 +35,6 @@ const tokens = (u: Usage) =>
   `in ${count(u.input)} · out ${count(u.output)} · cache read ${count(u.cache_read)} · cache write ${count(u.cache_write)} · total ${count(totalTokens(u))} · ${money(u.cost)}`
 const tokLine = (u: Usage) => `${count(totalTokens(u))} tok ${money(u.cost)}`
 const ago = (ms: number) => `last activity ${duration(ms / 1000)} ago`
-
-// `end` keeps up with the growing tree until anything next moves it. A refusal (`deny`: the
-// window moved meanwhile, no surface) or a rejection (the test kit has no scroller: "no
-// implementation") goes to the status line rather than nowhere.
-const toEnd = async ($: $) => {
-  const { deny } = await $.ui.scroll({ in: PANE, to: 'end' }).catch((err: unknown) => ({ deny: String(err) }))
-  $.ui.status(deny ? `delegate: jump to end failed: ${deny}` : undefined)
-}
-const follow = async ($: $) => {
-  await update($, following, () => true)
-  await toEnd($)
-}
 
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
@@ -146,7 +45,7 @@ export const register: Register = on => {
       const panes = await $.ui.panes()
       if (!panes.some(p => p.id === PANE && p.isShown)) return
       $.ui.invalidate('ui.render')
-      if ((await read($, view)).task && (await read($, following))) await toEnd($)
+      if ((await readView($)).task && (await readFollowing($))) await toEnd($)
     })
     return next(e)
   })
@@ -164,11 +63,11 @@ export const register: Register = on => {
     return { text: 'Delegate pane opened. /delegate again or q in the pane closes it.' }
   })
 
-  on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
+  on('ui.render', { component: 'Pane', requestId: 'delegate' }, async ($, e) => {
     const { Box, Text, Button } = $.ui.resolve(e)
     const now = await $.clock.now()
     const records = await loadRecords($)
-    const at = await read($, view)
+    const at = await readView($)
     const rec = records.find(r => r.task === at.task)
 
     // A live run's activity with its spinner, warning-colored once stalled; a finished run's state.
@@ -190,7 +89,7 @@ export const register: Register = on => {
                 key={`open-${row.rec.task}`}
                 plain
                 onPress={async () => {
-                  await update($, view, () => ({ task: row.rec.task }))
+                  await writeView($, () => ({ task: row.rec.task }))
                   await follow($)
                 }}
               >
@@ -222,15 +121,15 @@ export const register: Register = on => {
         : attempt?.session
           ? segmentOf(parseSession(await readLog($, attempt.session)), attempts.map(a => a.session), index)
           : undefined
-    const isFollowing = await read($, following)
+    const isFollowing = await readFollowing($)
     const brief = (await readText($, `${rec.run}/brief.md`)) ?? ''
-    const open = await read($, expanded)
+    const open = await readExpanded($)
     const { items, dropped } = fitTail(segment?.items ?? [{ kind: 'user', text: brief }], open)
     const usage = attempt?.usage ?? segment?.usage
     const isFirst = !attempts.slice(0, index).some(a => a.session === attempt?.session)
 
-    const back = () => update($, view, () => ({}))
-    const toggle = (id: string) => update($, expanded, list => (list.includes(id) ? list.filter(x => x !== id) : [...list, id]))
+    const back = () => writeView($, () => ({}))
+    const toggle = (id: string) => writeExpanded($, list => (list.includes(id) ? list.filter(x => x !== id) : [...list, id]))
 
     const draw = (item: Item, i: number) => {
       if (item.kind === 'user')
@@ -320,7 +219,7 @@ export const register: Register = on => {
                 variant={i === index ? 'primary' : undefined}
                 label={`${i + 1} ${a.model} ${a.outcome}`}
                 onPress={async () => {
-                  await update($, view, v => ({ ...v, attempt: i === attempts.length - 1 ? undefined : i }))
+                  await writeView($, v => ({ ...v, attempt: i === attempts.length - 1 ? undefined : i }))
                   await follow($)
                 }}
               />

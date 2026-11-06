@@ -147,6 +147,9 @@ test('live first, then finished and failed newest first, with their icons', asyn
   expect(flat((await ui.find({ key: 'band-ok-older' }))?.text ?? '')).toContain('✓ ok-older review ds-flash 10s')
   expect(await ui.find({ type: 'Text', text: 'Added hello.txt and bye.txt.' })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: 'Ran out of time.' })).toBeDefined()
+  // The task reads plain; model and elapsed are dim.
+  expect((await ui.find({ type: 'Text', text: /^ok-older\s*$/ }))?.props.dimColor).toBe(false)
+  expect((await ui.find({ type: 'Text', text: /^ds-flash\s*$/ }))?.props.dimColor).toBe(true)
   await ui.unmount()
 })
 

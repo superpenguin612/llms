@@ -65,13 +65,14 @@ const registerBand: Register = on => {
             w,
           )
           // The pieces grouped the way they are colored; joined they are the line as cut.
-          const colored: [string, string][] = [
-            [line.icon, lk.color],
-            [line.task, ''],
-            [line.word, lk.color],
-            [line.model, ''],
-            [line.elapsed, ''],
-            [line.detail, ''],
+          // [text, color, dim]: icon and state word in the state's color, the task plain, the rest dim.
+          const colored: [string, string, boolean][] = [
+            [line.icon, lk.color, false],
+            [line.task, '', false],
+            [line.word, lk.color, false],
+            [line.model, '', true],
+            [line.elapsed, '', true],
+            [line.detail, '', true],
           ]
           return (
             <Button
@@ -86,9 +87,9 @@ const registerBand: Register = on => {
             >
               {colored
                 .filter(([text]) => text)
-                .flatMap(([text, color], j) => [
+                .flatMap(([text, color, dim], j) => [
                   ...(j > 0 ? [' '] : []),
-                  <Text key={`piece-${row.rec.task}-${j}`} color={color || undefined} dimColor={!color}>
+                  <Text key={`piece-${row.rec.task}-${j}`} color={color || undefined} dimColor={dim}>
                     {text}
                   </Text>,
                 ])}

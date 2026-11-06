@@ -2,12 +2,19 @@ import type { On } from 'claude-code'
 import { expect, test } from 'claude-code/testing'
 
 import { OK_SESSION } from './fixture'
-import type { RunRecord } from './delegate'
+import { STALL_MS, type RunRecord } from './delegate'
 
 const R = '/h/.local/share/delegate/runs'
 const NOW = Date.parse('2026-11-04T16:23:41Z')
 // OK_SESSION cut after the first tool calls: a worker running bash, as a live log reads mid-run.
 const PARTIAL = OK_SESSION.split('\n').slice(0, 5).join('\n') + '\n'
+// The same log with every entry older than STALL_MS: a worker that logged nothing since.
+const STALE =
+  PARTIAL
+    .split('\n')
+    .filter(line => line.trim())
+    .map(line => line.replace(/"timestamp":\s*"[^"]*"/g, `"timestamp": "${new Date(NOW - STALL_MS - 10_000).toISOString()}"`))
+    .join('\n') + '\n'
 const usage = { input: 1, output: 2, cache_read: 3, cache_write: 0, cost: 0.001 }
 
 const rec = (task: string, started: string, rest: Partial<RunRecord>): RunRecord => ({
@@ -212,6 +219,20 @@ test('seven runs leave five rows and a more line', async ($, on) => {
     'band-many-2',
   ])
   expect(await ui.find({ type: 'Text', text: '+2 more · /delegate' })).toBeDefined()
+  await ui.unmount()
+})
+
+test('a stalled live run shows the warning icon and word', async ($, on) => {
+  records = { 'live-s': rec('live-s', LIVE, { status: 'running' }) }
+  extraFiles = { [`${R}/live-s/running`]: '4242\n', [`${R}/live-s/sessions/1.jsonl`]: STALE }
+  seed(on)
+  const ui = await $.ui.mount(BAND(BAND_PROPS))
+  // One live row, its icon and state word both in the warning color.
+  expect((await ui.findAll({ type: 'Button' })).map(b => b.key)).toEqual(['band-live-s'])
+  const text = ((await ui.find({ key: 'band-live-s' }))?.text ?? '').replace(/ +/g, ' ')
+  expect(text).toContain('⚠ live-s stalled')
+  expect(await ui.find({ type: 'Text', text: '⚠' })).toMatchObject({ props: { color: 'warning' } })
+  expect(await ui.find({ type: 'Text', text: /^stalled\s*$/ })).toMatchObject({ props: { color: 'warning' } })
   await ui.unmount()
 })
 

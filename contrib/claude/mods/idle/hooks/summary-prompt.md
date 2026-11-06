@@ -1,6 +1,11 @@
 Write a summary of this conversation so far for a fresh context that continues the work. It
 replaces everything before the last two user prompts, which are kept word for word after it.
 
+First, inside <analysis></analysis>, go through the conversation from the start in order: each
+user message, what was done about it, the decisions, the errors and how they were fixed, and the
+identifiers and numbers involved. Then write the summary inside <summary></summary>. Only the
+summary is kept.
+
 Include, in this order, with these headings:
 - **Goal:** what the session is for and what the user asked for. Quote the user's exact words
   for every request, decision, preference or correction that matters.

@@ -136,13 +136,12 @@ def read_compaction(path):
         raise EvalError(f"{path}: no system/compact_boundary record")
     boundary = records[boundary_index]
 
-    # The engine flags its summary (isCompactSummary) and lists what it kept; the mod's summary is
-    # a plain user record after the boundary, followed by the kept records, up to the /compact
-    # command's own records.
+    # The engine lists what it kept in the boundary's metadata; after the mod's compaction the kept
+    # records follow the summary, up to the /compact command's own records.
     after = records[boundary_index + 1:]
-    summary_index = next((i for i, r in enumerate(after) if r.get("isCompactSummary") is True), None)
-    if summary_index is None:
-        summary_index = next((i for i, r in enumerate(after) if r.get("type") == "user"), None)
+    # The first user record after the boundary is the summary. Don't search for isCompactSummary:
+    # the mod's kept tail can carry an earlier engine summary with that flag.
+    summary_index = next((i for i, r in enumerate(after) if r.get("type") == "user"), None)
     if summary_index is None:
         raise EvalError(f"{path}: no summary record after the boundary")
     summary_record = after[summary_index]

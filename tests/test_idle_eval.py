@@ -79,6 +79,8 @@ class TestReadCompaction(TranscriptCase):
             record(type="system", subtype="compact_boundary", uuid="boundary", compactMetadata={}),
             record(type="user", uuid="summary", message={"role": "user", "content": idle_eval.MOD_PREFIX + " x"}),
             record(type="user", uuid="keep-user", message={"role": "user", "content": "keep this request"}),
+            record(type="user", uuid="old-summary", isCompactSummary=True,
+                   message={"role": "user", "content": idle_eval.ENGINE_PREFIX + " old"}),
             record(type="user", uuid="meta", isMeta=True, message={"role": "user", "content": "a skill's text"}),
             record(type="attachment", uuid="att"),
             record(type="assistant", uuid="keep-assistant",
@@ -88,7 +90,7 @@ class TestReadCompaction(TranscriptCase):
         ])
         summary, kept, _ = idle_eval.read_compaction(path)
         self.assertTrue(summary.startswith(idle_eval.MOD_PREFIX))
-        self.assertEqual([r["uuid"] for r in kept], ["keep-user", "keep-assistant"])
+        self.assertEqual([r["uuid"] for r in kept], ["keep-user", "old-summary", "keep-assistant"])
 
 
 class TestModeCheck(unittest.TestCase):

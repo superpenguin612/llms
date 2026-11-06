@@ -244,7 +244,7 @@ test(
     const prompts: string[] = []
     on('model.fork', (_, e) => {
       prompts.push(e.prompt)
-      return { value: { isAnswered: true, text: 'S', usage: uses } }
+      return { value: { isAnswered: true, text: '<analysis>walk through</analysis>\n<summary>\nS\n</summary>', usage: uses } }
     })
     engine(on, seen)
     await start($)

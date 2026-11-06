@@ -35,6 +35,10 @@ const stamp = (ms: number) => {
   return `${at.getFullYear()}${pad(at.getMonth() + 1)}${pad(at.getDate())}-${pad(at.getHours())}${pad(at.getMinutes())}${pad(at.getSeconds())}`
 }
 
+// The prompt asks for <analysis> then <summary>; keep only the summary (whole reply if untagged).
+export const summaryOf = (reply: string) =>
+  (/<summary>([\s\S]*?)<\/summary>/.exec(reply)?.[1] ?? reply.replace(/<analysis>[\s\S]*?<\/analysis>/, '')).trim()
+
 const slug = (cwd: string) => cwd.replace(/^\//, '').replace(/\//g, '-')
 
 const withPerson = (text: string, own: string) =>
@@ -187,10 +191,11 @@ export const register: Register = (on, options) => {
           r = undefined
         }
         if (r !== undefined && r.skip === undefined) {
-          await saveSummary($, reply.text)
+          const summaryText = summaryOf(reply.text)
+          await saveSummary($, summaryText)
           const summary: SessionMessage = {
             role: 'user',
-            text: HEADER + reply.text,
+            text: HEADER + summaryText,
             toolUses: [],
           }
           return { ...r, messages: [summary, ...tail] }

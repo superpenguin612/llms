@@ -1,5 +1,5 @@
 import { atom, read, update } from 'claude-code'
-import type { EngineInterface, Register, SessionCompactResult, SessionMessage, Timer } from 'claude-code'
+import type { EngineInterface, ModelUsage, Register, SessionCompactResult, SessionMessage, Timer } from 'claude-code'
 
 import type { Away } from '../types'
 
@@ -31,6 +31,11 @@ const hhmm = (ms: number) => {
   const at = new Date(ms)
   return `${String(at.getHours()).padStart(2, '0')}:${String(at.getMinutes()).padStart(2, '0')}`
 }
+
+const thousands = (n: number | undefined) => ((n ?? 0) / 1000).toFixed(1)
+
+const forkUsage = (usage: ModelUsage) =>
+  `idle: summary from a fork of the session (cache read ${thousands(usage.cache_read_input_tokens)}k, uncached ${thousands((usage.input_tokens ?? 0) + (usage.cache_creation_input_tokens ?? 0))}k, output ${thousands(usage.output_tokens)}k)`
 
 const stamp = (ms: number) => {
   const at = new Date(ms)
@@ -247,6 +252,7 @@ export const register: Register = (on, options) => {
         .fork({ prompt: withExtra(text, own) })
         .catch((err: unknown) => ({ isAnswered: false as const, reason: String(err) }))
       if (reply.isAnswered) {
+        $.ui.log(forkUsage(reply.usage))
         let r: SessionCompactResult | undefined
         try {
           r = await next({ ...e, messages: tail, instructions: COMPACTED })
@@ -256,11 +262,11 @@ export const register: Register = (on, options) => {
           r = undefined
         }
         if (r !== undefined && r.skip === undefined) {
-          const summaryText = summaryOf(reply.text)
+          const summaryText = HEADER + summaryOf(reply.text)
           await saveSummary($, summaryText)
           const summary: SessionMessage = {
             role: 'user',
-            text: HEADER + summaryText,
+            text: summaryText,
             toolUses: [],
           }
           return { ...r, messages: [summary, ...tail] }

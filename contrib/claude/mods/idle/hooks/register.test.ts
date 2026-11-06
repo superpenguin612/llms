@@ -50,7 +50,13 @@ const transcript = [
   message('assistant', 'a4'),
 ]
 
-const uses = { input: 1, output: 2, cache_read: 3, cache_write: 0, cost: 0.001 }
+const uses = {
+  input_tokens: 12_345,
+  output_tokens: 2_000,
+  cache_read_input_tokens: 45_600,
+  cache_creation_input_tokens: 4_000,
+}
+
 const engine = (on: On, seen: SessionCompactInput[]) =>
   on('session.compact', (_, e) => {
     seen.push(e)
@@ -63,6 +69,7 @@ const seed = (on: On, entries: readonly FsEntry[] = [], tokens = 0) => {
   const removed: string[] = []
   const commands: string[] = []
   const writes: { path: string; text: string }[] = []
+  const logs: string[] = []
   const forks: string[] = []
   const clock = mock.clock(on, { now: NOW })
   mock.env(on, { HOME })
@@ -81,6 +88,10 @@ const seed = (on: On, entries: readonly FsEntry[] = [], tokens = 0) => {
   on('session.cwd', () => ({ value: CWD }))
   on('ui.status', (_, e) => {
     statuses.push(e.text)
+    return { value: undefined }
+  })
+  on('ui.log', (_, e) => {
+    logs.push(e.text)
     return { value: undefined }
   })
   on('prompt.submit', (_, e) => {
@@ -102,7 +113,7 @@ const seed = (on: On, entries: readonly FsEntry[] = [], tokens = 0) => {
     removed.push(...e.argv)
     return { value: { exitCode: 0, stdout: '', stderr: '' } }
   })
-  return { clock, statuses, submitted, removed, commands, writes, forks }
+  return { clock, statuses, submitted, removed, commands, writes, logs, forks }
 }
 
 const start = ($: Parameters<Parameters<typeof test>[1]>[0]) =>
@@ -383,7 +394,7 @@ test(
   'mod compaction keeps the last two real prompts and saves the fork summary',
   { options: { compaction: 'mod' } },
   async ($, on) => {
-    const { statuses, writes } = seed(on)
+    const { statuses, writes, logs } = seed(on)
     const seen: SessionCompactInput[] = []
     const prompts: string[] = []
     on('model.fork', (_, e) => {
@@ -408,7 +419,10 @@ test(
     expect(prompts[0]).toContain('The user asked to keep or stress: keep the API notes')
     expect(result.messages[0]).toEqual({ role: 'user', text: HEADER + 'S', toolUses: [] })
     expect(result.messages.slice(1)).toEqual(transcript.slice(4))
-    expect(writes).toEqual([{ path, text: 'S' }])
+    expect(writes).toEqual([{ path, text: HEADER + 'S' }])
+    expect(logs).toContain(
+      'idle: summary from a fork of the session (cache read 45.6k, uncached 16.3k, output 2.0k)',
+    )
     expect(statuses.at(-1)).toBe(`compacted at ${hhmm(NOW)}`)
   },
 )

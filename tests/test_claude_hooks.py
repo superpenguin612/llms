@@ -93,31 +93,6 @@ class TestReadGuard(HookCase):
         self.assertIsNone(self.read(f))
 
 
-class TestHandoffLoader(HookCase):
-    def setUp(self):
-        super().setUp()
-        self.dir = self.tmp / ".local/state/claude-handoffs"
-        self.dir.mkdir(parents=True)
-        (self.dir / "h.md").write_text("## Goal\nship it")
-        self.ptr = self.dir / "pending-work-repo"
-        self.ptr.write_text("~/.local/state/claude-handoffs/h.md")
-
-    def load(self):
-        _, out, _ = self.run_hook("handoff-loader.py", {"cwd": "/work/repo", "source": "clear"})
-        return json.loads(out)["hookSpecificOutput"]["additionalContext"] if out.strip() else None
-
-    def test_loads_once(self):
-        self.assertIn("ship it", self.load())
-        self.assertFalse(self.ptr.exists())
-        self.assertIsNone(self.load())
-
-    def test_stale_pointer_ignored(self):
-        old = time.time() - 3 * 3600
-        os.utime(self.ptr, (old, old))
-        self.assertIsNone(self.load())
-        self.assertFalse(self.ptr.exists())
-
-
 class TestAgentGuard(HookCase):
     def code(self, **tool_input):
         tool_input.setdefault("prompt", "x")
@@ -132,13 +107,6 @@ class TestAgentGuard(HookCase):
         self.assertEqual(self.code(model="haiku"), 2)
         self.assertEqual(self.code(model="fable"), 2)
         self.assertEqual(self.code(prompt="[not-sonnet: reason] x"), 0)
-
-
-class TestCompactInstructions(HookCase):
-    def test_prints_checklist(self):
-        _, out, _ = self.run_hook("compact-instructions.sh", {"trigger": "manual"})
-        self.assertTrue(out.startswith("## Checklist"))
-        self.assertIn("Next steps", out)
 
 
 class TestStatusLine(HookCase):

@@ -1,0 +1,18 @@
+{
+  "name": "idle",
+  "version": "0.1.0",
+  "description": "Keep a session's prompt cache warm while you are away",
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "compaction": {
+      "type": "string",
+      "options": [
+        "mod",
+        "engine"
+      ],
+      "default": "engine",
+      "description": "Who writes compaction summaries: this mod or the engine",
+      "title": "Compaction summaries"
+    }
+  }
+}

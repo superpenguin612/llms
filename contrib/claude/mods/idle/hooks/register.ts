@@ -10,6 +10,10 @@ const PRUNE_AFTER_MS = 30 * 24 * 60 * 60 * 1000
 const HOUR_MS = 60 * 60 * 1000
 // shortcut: assumes the 1-hour prompt cache TTL (the mod API doesn't expose it); revisit if sessions move to another TTL.
 const PING_MS = 50 * 60 * 1000
+// 2 h covers a typical break.
+const WARM_MS = 2 * HOUR_MS
+// A rewrite of a small context costs less than pings do, so only large ones stay warm.
+const WARM_MIN_TOKENS = 50_000
 const MAX_HOURS = 12
 const KEEPALIVE = 'keepalive: reply "ok" only'
 const USAGE = 'Usage: /away <hours> (max 12), /away 1.5h, or /away off.'
@@ -97,9 +101,11 @@ async function pruneCompactions($: $) {
 async function clearAway($: $) {
   ping?.cancel()
   ping = undefined
-  await update($, away, () => ({}))
+  await update($, away, (s) => (s.off === true ? { off: true } : {}))
   $.ui.status(undefined)
 }
+
+const contextTokens = async ($: $) => (await $.session.usage()).context.tokens ?? 0
 
 async function arm($: $, until: number, base: number) {
   ping?.cancel()
@@ -122,7 +128,8 @@ export const register: Register = (on, options) => {
   on('session.start', async ($, e, next) => {
     await $.command.register({
       name: 'away',
-      description: "Keep this session's cache warm until you're back: /away <hours> (max 12), /away off",
+      description:
+        "Keep this session's cache warm until you're back: /away <hours> (max 12), /away off. Sessions over 50k tokens stay warm 2 h after each turn by default.",
     })
     await pruneCompactions($)
 
@@ -141,7 +148,10 @@ export const register: Register = (on, options) => {
     const args = e.args.trim()
     if (args === 'off') {
       await clearAway($)
-      return { text: 'Away cancelled.' }
+      await update($, away, (s) => ({ ...s, off: true }))
+      return {
+        text: "Away cancelled; this session won't be kept warm automatically. /away <hours> turns it back on.",
+      }
     }
     if (args === '') {
       if ((await read($, away)).awayUntil === undefined) return { text: USAGE }
@@ -155,7 +165,12 @@ export const register: Register = (on, options) => {
 
     const now = await $.clock.now()
     const until = now + hours * HOUR_MS
-    const { lastTurnEnd } = await update($, away, (s) => ({ ...s, awayUntil: until, kind: 'away' }))
+    const { lastTurnEnd } = await update($, away, (s) => ({
+      ...s,
+      awayUntil: until,
+      kind: 'away',
+      off: undefined,
+    }))
     $.ui.status(`away until ${hhmm(until)}`)
     await arm($, until, lastTurnEnd ?? now)
     return { text: `Away until ${hhmm(until)}: pinging every 50 min to keep the cache warm.` }
@@ -163,13 +178,20 @@ export const register: Register = (on, options) => {
 
   on('turn.complete', async ($, e, next) => {
     const now = await $.clock.now()
-    const { pinging, awayUntil } = await update($, away, (s) => ({ ...s, lastTurnEnd: now }))
+    const { pinging, awayUntil, kind, off } = await update($, away, (s) => ({ ...s, lastTurnEnd: now }))
     if (pinging) {
       await update($, away, (s) => ({ ...s, pinging: undefined }))
       if (awayUntil !== undefined) await arm($, awayUntil, now)
       else await clearAway($)
-    } else if (awayUntil !== undefined && awayUntil > now) {
+    } else if (kind === 'away' && awayUntil !== undefined && awayUntil > now) {
       await arm($, awayUntil, now)
+    } else if (!off && (await contextTokens($)) >= WARM_MIN_TOKENS) {
+      const until = now + WARM_MS
+      await update($, away, (s) => ({ ...s, awayUntil: until, kind: 'warm' }))
+      $.ui.status(`warm until ${hhmm(until)}`)
+      await arm($, until, now)
+    } else {
+      await clearAway($)
     }
     return next(e)
   })

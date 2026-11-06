@@ -3,6 +3,7 @@ export type Away = {
   kind?: 'away' | 'warm'
   lastTurnEnd?: number
   pinging?: boolean
+  off?: boolean
 }
 
 declare module 'claude-code' {

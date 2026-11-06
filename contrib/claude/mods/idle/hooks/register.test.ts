@@ -58,7 +58,7 @@ const engine = (on: On, seen: SessionCompactInput[]) =>
     return { messages: [message('user', 'ENGINE SUMMARY'), ...e.messages.slice(-2)] }
   })
 
-const seed = (on: On, entries: readonly FsEntry[] = []) => {
+const seed = (on: On, entries: readonly FsEntry[] = [], tokens = 0) => {
   const statuses: (string | undefined)[] = []
   const submitted: string[] = []
   const removed: string[] = []
@@ -72,6 +72,13 @@ const seed = (on: On, entries: readonly FsEntry[] = []) => {
     return { value: { command: e.name } }
   })
   on('session.start', (_, e) => ({ cwd: e.cwd }))
+  on('session.usage', () => ({
+    value: {
+      startedAt: NOW,
+      context: { tokens, window: 200_000, percent: 0 },
+      rateLimits: [],
+    },
+  }))
   on('session.cwd', () => ({ value: CWD }))
   on('ui.status', (_, e) => {
     statuses.push(e.text)
@@ -102,8 +109,8 @@ const seed = (on: On, entries: readonly FsEntry[] = []) => {
 const start = ($: Parameters<Parameters<typeof test>[1]>[0]) =>
   $.session.start({ cwd: '/w', surface: 'terminal', isInteractive: true })
 
-const turn = ($: Parameters<Parameters<typeof test>[1]>[0]) =>
-  $.turn.complete({ answer: 'ok', durationMs: 1000, isAborted: false, turnId: 'turn-1', reason: 'answer' })
+const turn = ($: Parameters<Parameters<typeof test>[1]>[0], id = 'turn-1') =>
+  $.turn.complete({ answer: 'ok', durationMs: 1000, isAborted: false, turnId: id, reason: 'answer' })
 
 test('pruning removes compaction summaries older than 30 days', async ($, on) => {
   const old = { name: 'old.md', kind: 'file', size: 1, mtimeMs: NOW - 31 * DAY, isLink: false } as const
@@ -190,11 +197,100 @@ test('/away off cancels', async ($, on) => {
   await $.command.run({ command: 'away', args: '2' })
 
   const off = await $.command.run({ command: 'away', args: 'off' })
-  expect(off.text).toBe('Away cancelled.')
+  expect(off.text).toBe(
+    "Away cancelled; this session won't be kept warm automatically. /away <hours> turns it back on.",
+  )
   expect(statuses.at(-1)).toBeUndefined()
 
   await clock.advance(PING)
   expect(submitted).toEqual([])
+})
+
+test('a session over 50k tokens stays warm for 2 h and pings every 50 min', async ($, on) => {
+  const { clock, statuses, submitted } = seed(on, [], 60_000)
+  await start($)
+  await turn($)
+
+  const until = NOW + 2 * HOUR
+  expect(statuses.at(-1)).toBe(`warm until ${hhmm(until)}`)
+
+  await clock.advance(PING)
+  expect(submitted).toEqual([KEEPALIVE])
+  await turn($, 'ping-1')
+  expect(statuses.at(-1)).toBe(`warm until ${hhmm(until)}`)
+
+  await clock.advance(PING)
+  expect(submitted).toEqual([KEEPALIVE, KEEPALIVE])
+  await turn($, 'ping-2')
+
+  await clock.advance(20 * 60 * 1000)
+  expect(statuses.at(-1)).toBeUndefined()
+
+  await clock.advance(PING)
+  expect(submitted).toHaveLength(2)
+})
+
+test('a session under 50k tokens opens no warm window', async ($, on) => {
+  const { clock, statuses, submitted } = seed(on, [], 30_000)
+  await start($)
+  await turn($)
+
+  expect(statuses.at(-1)).toBeUndefined()
+  await clock.advance(3 * HOUR)
+  expect(submitted).toEqual([])
+})
+
+test('/away off blocks a warm window until /away <hours> clears it', async ($, on) => {
+  const { clock, statuses, submitted } = seed(on, [], 60_000)
+  await start($)
+
+  await $.command.run({ command: 'away', args: 'off' })
+  await turn($)
+  expect(statuses.at(-1)).toBeUndefined()
+  await clock.advance(PING)
+  expect(submitted).toEqual([])
+
+  const three = await $.command.run({ command: 'away', args: '3' })
+  const untilThree = clock.now() + 3 * HOUR
+  expect(three.text).toBe(
+    `Away until ${hhmm(untilThree)}: pinging every 50 min to keep the cache warm.`,
+  )
+  await turn($)
+  expect(statuses.at(-1)).toBe(`away until ${hhmm(untilThree)}`)
+
+  await $.prompt.submit({ text: 'I am back' })
+  await turn($)
+  expect(statuses.at(-1)).toMatch(/^warm until /)
+})
+
+test('an explicit /away window is not replaced by a warm one', async ($, on) => {
+  const { clock, statuses } = seed(on, [], 60_000)
+  await start($)
+  await $.command.run({ command: 'away', args: '5' })
+
+  const until = NOW + 5 * HOUR
+  await clock.advance(10 * 60 * 1000)
+  await turn($)
+  expect(statuses.at(-1)).toBe(`away until ${hhmm(until)}`)
+
+  await clock.advance(10 * 60 * 1000)
+  await turn($, 'turn-2')
+  expect(statuses.at(-1)).toBe(`away until ${hhmm(until)}`)
+})
+
+test('a reload restores the warm window and pings from the last turn end', async ($, on) => {
+  const { clock, statuses, submitted } = seed(on, [], 60_000)
+  await start($)
+  await turn($)
+
+  const until = NOW + 2 * HOUR
+  await clock.advance(10 * 60 * 1000)
+  await start($)
+  expect(statuses.at(-1)).toBe(`warm until ${hhmm(until)}`)
+
+  await clock.advance(40 * 60 * 1000)
+  expect(submitted).toEqual([KEEPALIVE])
+  expect(statuses.at(-1)).toBe(`warm until ${hhmm(until)}`)
 })
 
 test('engine compaction adds our prompt, saves the summary, and a prompt clears the status', async ($, on) => {

@@ -434,7 +434,7 @@ test(
     expect(result.messages.slice(1)).toEqual(transcript.slice(4))
     expect(writes).toEqual([{ path, text: HEADER + 'S' }])
     expect(logs).toContain(
-      'idle: summary from a fork of the session (cache read 45.6k, uncached 16.3k, output 2.0k)',
+      'summary from a fork of the session (cache read 45.6k, uncached 16.3k, output 2.0k)',
     )
     expect(statuses.at(-1)).toBe(`compacted at ${hhmm(NOW)}`)
   },

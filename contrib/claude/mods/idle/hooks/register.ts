@@ -35,7 +35,7 @@ const hhmm = (ms: number) => {
 const thousands = (n: number | undefined) => ((n ?? 0) / 1000).toFixed(1)
 
 const forkUsage = (usage: ModelUsage) =>
-  `idle: summary from a fork of the session (cache read ${thousands(usage.cache_read_input_tokens)}k, uncached ${thousands((usage.input_tokens ?? 0) + (usage.cache_creation_input_tokens ?? 0))}k, output ${thousands(usage.output_tokens)}k)`
+  `summary from a fork of the session (cache read ${thousands(usage.cache_read_input_tokens)}k, uncached ${thousands((usage.input_tokens ?? 0) + (usage.cache_creation_input_tokens ?? 0))}k, output ${thousands(usage.output_tokens)}k)`
 
 const stamp = (ms: number) => {
   const at = new Date(ms)
@@ -276,7 +276,7 @@ export const register: Register = (on, options) => {
       }
     }
 
-    $.ui.log(`idle: engine wrote this summary; ${why}`)
+    $.ui.log(`engine wrote this summary; ${why}`)
     const r = await next({ ...e, instructions })
     await saveCompacted($, r)
     return r

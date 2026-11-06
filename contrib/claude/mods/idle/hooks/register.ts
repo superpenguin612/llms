@@ -172,15 +172,18 @@ export const register: Register = (on, options) => {
     }
 
     const tail = tailOf(e.messages)
+    let why = `the kept tail has ${tail.length} message(s)`
     if (tail.length >= 2) {
       const reply = await $.model
         .fork({ prompt: withExtra(text, own) })
-        .catch(() => undefined)
-      if (reply?.isAnswered) {
+        .catch((err: unknown) => ({ isAnswered: false as const, reason: String(err) }))
+      if (reply.isAnswered) {
         let r: SessionCompactResult | undefined
         try {
           r = await next({ ...e, messages: tail, instructions: COMPACTED })
-        } catch {
+          why = r.skip === undefined ? why : `the engine skipped the tail: ${r.skip}`
+        } catch (err) {
+          why = `the engine refused the tail: ${String(err)}`
           r = undefined
         }
         if (r !== undefined && r.skip === undefined) {
@@ -192,9 +195,12 @@ export const register: Register = (on, options) => {
           }
           return { ...r, messages: [summary, ...tail] }
         }
+      } else {
+        why = `the fork gave no summary: ${'reason' in reply ? reply.reason : 'no reason'}`
       }
     }
 
+    $.ui.log(`idle: engine wrote this summary; ${why}`)
     const r = await next({ ...e, instructions })
     await saveCompacted($, r)
     return r

@@ -136,16 +136,29 @@ def read_compaction(path):
         raise EvalError(f"{path}: no system/compact_boundary record")
     boundary = records[boundary_index]
 
-    summary_record = next(
-        (r for r in records[boundary_index + 1:] if r.get("isCompactSummary") is True), None
-    )
-    if summary_record is None:
-        raise EvalError(f"{path}: no record with isCompactSummary after the boundary")
+    # The engine flags its summary (isCompactSummary) and lists what it kept; the mod's summary is
+    # a plain user record after the boundary, followed by the kept records, up to the /compact
+    # command's own records.
+    after = records[boundary_index + 1:]
+    summary_index = next((i for i, r in enumerate(after) if r.get("isCompactSummary") is True), None)
+    if summary_index is None:
+        summary_index = next((i for i, r in enumerate(after) if r.get("type") == "user"), None)
+    if summary_index is None:
+        raise EvalError(f"{path}: no summary record after the boundary")
+    summary_record = after[summary_index]
 
     metadata = boundary.get("compactMetadata") or {}
     preserved = metadata.get("preservedMessages") or {}
     uuids = {str(u) for u in (preserved.get("uuids") or [])}
-    kept = [r for r in records if r.get("uuid") in uuids]
+    if uuids:
+        kept = [r for r in records if r.get("uuid") in uuids]
+    else:
+        kept = []
+        for r in after[summary_index + 1:]:
+            if "<local-command-caveat>" in summary_text(r) or "<command-name>/compact" in summary_text(r):
+                break
+            if r.get("type") in ("user", "assistant") and not r.get("isMeta"):
+                kept.append(r)
     return summary_text(summary_record), kept, boundary
 
 
@@ -470,6 +483,9 @@ def evaluate(transcript, out):
 
 
 def overall_pass(entries):
+    # Every transcript must be scored: an error or a mod fallback is not a pass.
+    if not entries or any(entry.get("status") != "scored" for entry in entries):
+        return False
     return all(
         entry["scores"]["mod"]["total"] >= entry["scores"]["engine"]["total"]
         for entry in entries if entry.get("status") == "scored"

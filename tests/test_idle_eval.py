@@ -73,6 +73,23 @@ class TestReadCompaction(TranscriptCase):
         self.assertNotIn("old request", rendered)
         self.assertNotIn("not preserved", rendered)
 
+    def test_mod_format_without_metadata(self):
+        # The mod's summary is a plain user record; kept records run up to the /compact command.
+        path = self.write_jsonl([
+            record(type="system", subtype="compact_boundary", uuid="boundary", compactMetadata={}),
+            record(type="user", uuid="summary", message={"role": "user", "content": idle_eval.MOD_PREFIX + " x"}),
+            record(type="user", uuid="keep-user", message={"role": "user", "content": "keep this request"}),
+            record(type="user", uuid="meta", isMeta=True, message={"role": "user", "content": "a skill's text"}),
+            record(type="attachment", uuid="att"),
+            record(type="assistant", uuid="keep-assistant",
+                   message={"role": "assistant", "content": [{"type": "text", "text": "keep this answer"}]}),
+            record(type="user", uuid="caveat", message={"role": "user", "content": "<local-command-caveat>x</local-command-caveat>"}),
+            record(type="user", uuid="cmd", message={"role": "user", "content": "<command-name>/compact</command-name>"}),
+        ])
+        summary, kept, _ = idle_eval.read_compaction(path)
+        self.assertTrue(summary.startswith(idle_eval.MOD_PREFIX))
+        self.assertEqual([r["uuid"] for r in kept], ["keep-user", "keep-assistant"])
+
 
 class TestModeCheck(unittest.TestCase):
     def test_mod_and_engine_framing(self):
@@ -112,8 +129,12 @@ class TestPassRule(unittest.TestCase):
         self.assertTrue(idle_eval.overall_pass([
             self.entry("scored", 10, 10),
             self.entry("scored", 8, 12),
+        ]))
+        self.assertFalse(idle_eval.overall_pass([
+            self.entry("scored", 10, 10),
             self.entry("mode_fallback", 0, 0),
         ]))
+        self.assertFalse(idle_eval.overall_pass([]))
         self.assertFalse(idle_eval.overall_pass([
             self.entry("scored", 10, 11),
             self.entry("scored", 12, 11),

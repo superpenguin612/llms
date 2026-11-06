@@ -1,6 +1,6 @@
 export type Away = {
   awayUntil?: number
-  kind?: 'away' | 'warm'
+  hours?: number
   lastTurnEnd?: number
   pinging?: boolean
   off?: boolean

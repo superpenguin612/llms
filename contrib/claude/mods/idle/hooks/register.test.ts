@@ -51,7 +51,6 @@ const transcript = [
 ]
 
 const uses = { input: 1, output: 2, cache_read: 3, cache_write: 0, cost: 0.001 }
-
 const engine = (on: On, seen: SessionCompactInput[]) =>
   on('session.compact', (_, e) => {
     seen.push(e)
@@ -134,8 +133,10 @@ test('/away takes hours up to 12 and refuses the rest', async ($, on) => {
 
   const two = await $.command.run({ command: 'away', args: '2' })
   const untilTwo = NOW + 2 * HOUR
-  expect(two.text).toBe(`Away until ${hhmm(untilTwo)}: pinging every 50 min to keep the cache warm.`)
-  expect(statuses.at(-1)).toBe(`away until ${hhmm(untilTwo)}`)
+  expect(two.text).toBe(
+    `This session stays warm 2 h after each of your turns (now until ${hhmm(untilTwo)}).`,
+  )
+  expect(statuses.at(-1)).toBe(`warm until ${hhmm(untilTwo)}`)
 
   const before = statuses.length
   for (const args of ['13', '0', 'abc']) {
@@ -146,8 +147,10 @@ test('/away takes hours up to 12 and refuses the rest', async ($, on) => {
 
   const oneAndAHalf = await $.command.run({ command: 'away', args: '1.5h' })
   const untilOneAndAHalf = NOW + 1.5 * HOUR
-  expect(oneAndAHalf.text).toBe(`Away until ${hhmm(untilOneAndAHalf)}: pinging every 50 min to keep the cache warm.`)
-  expect(statuses.at(-1)).toBe(`away until ${hhmm(untilOneAndAHalf)}`)
+  expect(oneAndAHalf.text).toBe(
+    `This session stays warm 1.5 h after each of your turns (now until ${hhmm(untilOneAndAHalf)}).`,
+  )
+  expect(statuses.at(-1)).toBe(`warm until ${hhmm(untilOneAndAHalf)}`)
 })
 
 test('a turn re-arms the ping and it submits the keepalive prompt', async ($, on) => {
@@ -161,34 +164,39 @@ test('a turn re-arms the ping and it submits the keepalive prompt', async ($, on
 
   await clock.advance(PING)
   expect(submitted.filter(text => text === KEEPALIVE)).toHaveLength(1)
-  expect(statuses.at(-1)).toMatch(/^away until /)
+  expect(statuses.at(-1)).toMatch(/^warm until /)
 })
 
-test('an away shorter than the ping is cleared when its window ends', async ($, on) => {
+test('a window shorter than the ping is cleared when its window ends', async ($, on) => {
   const { clock, statuses, submitted } = seed(on)
   await start($)
   await $.command.run({ command: 'away', args: '0.5' })
   await turn($)
 
   await clock.advance(30 * 60 * 1000 - 1)
-  expect(statuses.at(-1)).toMatch(/^away until /)
+  expect(statuses.at(-1)).toMatch(/^warm until /)
 
   await clock.advance(1)
   expect(submitted).toEqual([])
   expect(statuses.at(-1)).toBeUndefined()
 })
 
-test("a person's prompt cancels the ping", async ($, on) => {
+test("/away 5 keeps its window through a person's prompt and restarts it after the turn", async ($, on) => {
   const { clock, statuses, submitted } = seed(on)
   await start($)
-  await $.command.run({ command: 'away', args: '2' })
+  await $.command.run({ command: 'away', args: '5' })
 
   await clock.advance(5 * 60 * 1000)
   await $.prompt.submit({ text: 'I am back' })
-  expect(statuses.at(-1)).toBeUndefined()
+  expect(statuses.at(-1)).toBe(`warm until ${hhmm(NOW + 5 * HOUR)}`)
+
+  await turn($)
+  const until = clock.now() + 5 * HOUR
+  expect(statuses.at(-1)).toBe(`warm until ${hhmm(until)}`)
+  expect(statuses.at(-1)).not.toBe(`warm until ${hhmm(clock.now() + 2 * HOUR)}`)
 
   await clock.advance(PING)
-  expect(submitted).toEqual(['I am back'])
+  expect(submitted.filter(text => text === KEEPALIVE)).toHaveLength(1)
 })
 
 test('/away typed after a turn pings 50 min after that turn, not after the command', async ($, on) => {
@@ -204,15 +212,13 @@ test('/away typed after a turn pings 50 min after that turn, not after the comma
   expect(submitted.filter(text => text === KEEPALIVE)).toHaveLength(1)
 })
 
-test('/away off cancels', async ($, on) => {
+test('/away off clears the window', async ($, on) => {
   const { clock, statuses, submitted } = seed(on)
   await start($)
   await $.command.run({ command: 'away', args: '2' })
 
   const off = await $.command.run({ command: 'away', args: 'off' })
-  expect(off.text).toBe(
-    "Away cancelled; this session won't be kept warm automatically. /away <hours> turns it back on.",
-  )
+  expect(off.text).toBe("This session won't be kept warm. /away <hours> turns it back on.")
   expect(statuses.at(-1)).toBeUndefined()
 
   await clock.advance(PING)
@@ -243,7 +249,7 @@ test('a session over 50k tokens stays warm for 2 h and pings every 50 min', asyn
   expect(submitted).toHaveLength(2)
 })
 
-test('a session under 50k tokens opens no warm window', async ($, on) => {
+test('a session under 50k tokens opens no window until /away 3', async ($, on) => {
   const { clock, statuses, submitted } = seed(on, [], 30_000)
   await start($)
   await turn($)
@@ -251,9 +257,17 @@ test('a session under 50k tokens opens no warm window', async ($, on) => {
   expect(statuses.at(-1)).toBeUndefined()
   await clock.advance(3 * HOUR)
   expect(submitted).toEqual([])
+
+  await $.command.run({ command: 'away', args: '3' })
+  await turn($, 'turn-2')
+  const until = clock.now() + 3 * HOUR
+  expect(statuses.at(-1)).toBe(`warm until ${hhmm(until)}`)
+
+  await clock.advance(PING)
+  expect(submitted.filter(text => text === KEEPALIVE)).toHaveLength(1)
 })
 
-test('/away off blocks a warm window until /away <hours> clears it', async ($, on) => {
+test('/away off opens nothing on the next turn; /away 2 turns it back on', async ($, on) => {
   const { clock, statuses, submitted } = seed(on, [], 60_000)
   await start($)
 
@@ -263,32 +277,52 @@ test('/away off blocks a warm window until /away <hours> clears it', async ($, o
   await clock.advance(PING)
   expect(submitted).toEqual([])
 
-  const three = await $.command.run({ command: 'away', args: '3' })
-  const untilThree = clock.now() + 3 * HOUR
-  expect(three.text).toBe(
-    `Away until ${hhmm(untilThree)}: pinging every 50 min to keep the cache warm.`,
+  const two = await $.command.run({ command: 'away', args: '2' })
+  const untilTwo = clock.now() + 2 * HOUR
+  expect(two.text).toBe(
+    `This session stays warm 2 h after each of your turns (now until ${hhmm(untilTwo)}).`,
   )
-  await turn($)
-  expect(statuses.at(-1)).toBe(`away until ${hhmm(untilThree)}`)
+  await turn($, 'turn-2')
+  const until = clock.now() + 2 * HOUR
+  expect(statuses.at(-1)).toBe(`warm until ${hhmm(until)}`)
 
-  await $.prompt.submit({ text: 'I am back' })
-  await turn($)
-  expect(statuses.at(-1)).toMatch(/^warm until /)
+  await clock.advance(PING)
+  expect(submitted.filter(text => text === KEEPALIVE)).toHaveLength(1)
 })
 
-test('an explicit /away window is not replaced by a warm one', async ($, on) => {
+test('/away with no argument reports the current setting', async ($, on) => {
   const { clock, statuses } = seed(on, [], 60_000)
   await start($)
-  await $.command.run({ command: 'away', args: '5' })
-
-  const until = NOW + 5 * HOUR
-  await clock.advance(10 * 60 * 1000)
   await turn($)
-  expect(statuses.at(-1)).toBe(`away until ${hhmm(until)}`)
 
-  await clock.advance(10 * 60 * 1000)
-  await turn($, 'turn-2')
-  expect(statuses.at(-1)).toBe(`away until ${hhmm(until)}`)
+  const until = NOW + 2 * HOUR
+  const byDefault = await $.command.run({ command: 'away', args: '' })
+  expect(byDefault.text).toBe(
+    `Kept warm 2 h after each turn (default for sessions over 50k tokens); now until ${hhmm(until)}.\nUsage: /away <hours> (max 12), /away 1.5h, or /away off.`,
+  )
+
+  await $.command.run({ command: 'away', args: '5' })
+  const untilFive = clock.now() + 5 * HOUR
+  const explicit = await $.command.run({ command: 'away', args: '' })
+  expect(explicit.text).toBe(
+    `Kept warm 5 h after each turn (set with /away); now until ${hhmm(untilFive)}.\nUsage: /away <hours> (max 12), /away 1.5h, or /away off.`,
+  )
+
+  await $.command.run({ command: 'away', args: 'off' })
+  const off = await $.command.run({ command: 'away', args: '' })
+  expect(off.text).toBe(
+    "Not kept warm (off). /away <hours> turns it back on.\nUsage: /away <hours> (max 12), /away 1.5h, or /away off.",
+  )
+  expect(statuses.at(-1)).toBeUndefined()
+})
+
+test('/away with no argument reports a session under 50k tokens', async ($, on) => {
+  seed(on, [], 30_000)
+  await start($)
+  const run = await $.command.run({ command: 'away', args: '' })
+  expect(run.text).toBe(
+    "Not kept warm: the session is under 50k tokens. /away <hours> keeps it warm anyway.\nUsage: /away <hours> (max 12), /away 1.5h, or /away off.",
+  )
 })
 
 test('a reload restores the warm window and pings from the last turn end', async ($, on) => {
@@ -306,11 +340,12 @@ test('a reload restores the warm window and pings from the last turn end', async
   expect(statuses.at(-1)).toBe(`warm until ${hhmm(until)}`)
 })
 
-test('engine compaction adds our prompt, saves the summary, and a prompt clears the status', async ($, on) => {
-  const { statuses, writes } = seed(on)
+test('engine compaction adds our prompt, saves the summary, and a prompt restores the warm status', async ($, on) => {
+  const { statuses, writes } = seed(on, [], 60_000)
   const seen: SessionCompactInput[] = []
   engine(on, seen)
   await start($)
+  await turn($)
 
   const result = await $.session.compact({
     trigger: 'manual',
@@ -326,7 +361,7 @@ test('engine compaction adds our prompt, saves the summary, and a prompt clears 
   expect(statuses.at(-1)).toBe(`compacted at ${hhmm(NOW)}`)
 
   await $.prompt.submit({ text: 'I am back' })
-  expect(statuses.at(-1)).toBeUndefined()
+  expect(statuses.at(-1)).toBe(`warm until ${hhmm(NOW + 2 * HOUR)}`)
 })
 
 test('a subagent compaction is left untouched and saves nothing', async ($, on) => {

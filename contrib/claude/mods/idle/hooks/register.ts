@@ -22,7 +22,7 @@ const COMPACTED = 'Summarize in one sentence; this summary will be replaced.'
 const HEADER =
   'This session is being continued from a previous conversation. The summary below covers the earlier portion of the conversation.\n\nSummary:\n'
 
-const away = atom({ plugin: 'idle', key: 'away' } as const, {} as Away, { shape: 'away-2' })
+const away = atom({ plugin: 'idle', key: 'away' } as const, {} as Away, { shape: 'away-3' })
 
 let ping: Timer | undefined
 let prompt: string | undefined
@@ -101,8 +101,8 @@ async function pruneCompactions($: $) {
 async function clearAway($: $) {
   ping?.cancel()
   ping = undefined
-  // Keep what outlives a window: the opt-out, and when the last request ended (the cache's clock).
-  await update($, away, (s) => ({ off: s.off, lastTurnEnd: s.lastTurnEnd }))
+  // Keep what outlives a window: the setting, the opt-out, and when the last request ended (the cache's clock).
+  await update($, away, (s) => ({ off: s.off, hours: s.hours, lastTurnEnd: s.lastTurnEnd }))
   $.ui.status(undefined)
 }
 
@@ -130,14 +130,14 @@ export const register: Register = (on, options) => {
     await $.command.register({
       name: 'away',
       description:
-        "Keep this session's cache warm until you're back: /away <hours> (max 12), /away off. Sessions over 50k tokens stay warm 2 h after each turn by default.",
+        "Keep this session's cache warm after each of your turns: /away <hours> (max 12) sets how long, /away off stops it, /away shows it. Default: 2 h for sessions over 50k tokens.",
     })
     await pruneCompactions($)
 
     const now = await $.clock.now()
-    const { awayUntil, kind, lastTurnEnd } = await read($, away)
+    const { awayUntil, lastTurnEnd } = await read($, away)
     if (awayUntil !== undefined && awayUntil > now) {
-      $.ui.status(`${kind === 'warm' ? 'warm' : 'away'} until ${hhmm(awayUntil)}`)
+      $.ui.status(`warm until ${hhmm(awayUntil)}`)
       await arm($, awayUntil, lastTurnEnd ?? now)
     } else if (awayUntil !== undefined) {
       await clearAway($)
@@ -150,14 +150,27 @@ export const register: Register = (on, options) => {
     if (args === 'off') {
       await clearAway($)
       await update($, away, (s) => ({ ...s, off: true }))
-      return {
-        text: "Away cancelled; this session won't be kept warm automatically. /away <hours> turns it back on.",
-      }
+      return { text: "This session won't be kept warm. /away <hours> turns it back on." }
     }
     if (args === '') {
-      if ((await read($, away)).awayUntil === undefined) return { text: USAGE }
-      await clearAway($)
-      return { text: 'Away cancelled.' }
+      const now = await $.clock.now()
+      const { awayUntil, hours, off } = await read($, away)
+      const open =
+        awayUntil !== undefined && awayUntil > now ? `; now until ${hhmm(awayUntil)}` : ''
+      if (off) {
+        return { text: `Not kept warm (off). /away <hours> turns it back on.\n${USAGE}` }
+      }
+      if (hours !== undefined) {
+        return { text: `Kept warm ${hours} h after each turn (set with /away)${open}.\n${USAGE}` }
+      }
+      if ((await contextTokens($)) >= WARM_MIN_TOKENS) {
+        return {
+          text: `Kept warm ${WARM_MS / HOUR_MS} h after each turn (default for sessions over 50k tokens)${open}.\n${USAGE}`,
+        }
+      }
+      return {
+        text: `Not kept warm: the session is under 50k tokens. /away <hours> keeps it warm anyway.\n${USAGE}`,
+      }
     }
 
     const match = /^(\d+(?:\.\d+)?)(?:h)?$/i.exec(args)
@@ -169,30 +182,43 @@ export const register: Register = (on, options) => {
     const { lastTurnEnd } = await update($, away, (s) => ({
       ...s,
       awayUntil: until,
-      kind: 'away',
+      hours,
       off: undefined,
     }))
-    $.ui.status(`away until ${hhmm(until)}`)
+    $.ui.status(`warm until ${hhmm(until)}`)
     await arm($, until, lastTurnEnd ?? now)
-    return { text: `Away until ${hhmm(until)}: pinging every 50 min to keep the cache warm.` }
+    return {
+      text: `This session stays warm ${hours} h after each of your turns (now until ${hhmm(until)}).`,
+    }
   })
 
   on('turn.complete', async ($, e, next) => {
     const now = await $.clock.now()
-    const { pinging, awayUntil, kind, off } = await update($, away, (s) => ({ ...s, lastTurnEnd: now }))
+    const { pinging, awayUntil, off, hours } = await update($, away, (s) => ({
+      ...s,
+      lastTurnEnd: now,
+    }))
     if (pinging) {
       await update($, away, (s) => ({ ...s, pinging: undefined }))
       if (awayUntil !== undefined) await arm($, awayUntil, now)
       else await clearAway($)
-    } else if (kind === 'away' && awayUntil !== undefined && awayUntil > now) {
-      await arm($, awayUntil, now)
-    } else if (!off && (await contextTokens($)) >= WARM_MIN_TOKENS) {
-      const until = now + WARM_MS
-      await update($, away, (s) => ({ ...s, awayUntil: until, kind: 'warm' }))
-      $.ui.status(`warm until ${hhmm(until)}`)
-      await arm($, until, now)
-    } else {
+    } else if (off) {
       await clearAway($)
+    } else {
+      const length =
+        hours !== undefined
+          ? hours * HOUR_MS
+          : (await contextTokens($)) >= WARM_MIN_TOKENS
+            ? WARM_MS
+            : undefined
+      if (length === undefined) {
+        await clearAway($)
+      } else {
+        const until = now + length
+        await update($, away, (s) => ({ ...s, awayUntil: until }))
+        $.ui.status(`warm until ${hhmm(until)}`)
+        await arm($, until, now)
+      }
     }
     return next(e)
   })
@@ -251,9 +277,13 @@ export const register: Register = (on, options) => {
   })
 
   // Any prompt that is not this mod's own ping means the person is back: it
-  // cancels away and clears the compaction status.
+  // clears the compaction status, but leaves the window and its timer alone.
   on('prompt.submit', async ($, e, next) => {
-    if (!(e.origin?.kind === 'plugin' && e.origin.name === 'idle')) await clearAway($)
+    if (!(e.origin?.kind === 'plugin' && e.origin.name === 'idle')) {
+      const now = await $.clock.now()
+      const { awayUntil } = await read($, away)
+      $.ui.status(awayUntil !== undefined && awayUntil > now ? `warm until ${hhmm(awayUntil)}` : undefined)
+    }
     return next(e)
   })
 }

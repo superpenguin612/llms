@@ -35,8 +35,10 @@ If `mod` produces the engine's `ran out of context` framing, that transcript is 
 
 It is not free: two compaction calls, one probe-generation call, two answer calls and one grading
 call per transcript, all on Sonnet. The probe and compaction calls read the whole transcript, so
-cost grows with transcript length. `results.json` records each compaction's reported
-`total_cost_usd`; the answer and grading calls are extra (see your Claude usage).
+cost grows with transcript length: each fork writes the whole transcript to the cache once
+(~150k tokens for a 150k session). `results.json` records the tokens of each fork's own turn
+(`tokens`); ignore its `cost_usd`, which is the resumed session's running total and includes the
+original session. The compaction, answer and grading calls are extra (see your Claude usage).
 
 Do not run this in the test suite or on transcripts you are not willing to send to the model.
 

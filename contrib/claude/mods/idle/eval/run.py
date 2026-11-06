@@ -249,6 +249,22 @@ def run_compaction(transcript, mode):
     return new_id, cost
 
 
+def added_usage(original, compacted):
+    """Tokens the eval's own requests used: usage on the records the fork added. The stream's
+    total_cost_usd is the resumed session's running total, so it includes the original session."""
+    seen = {r.get("uuid") for r in load_jsonl(original)}
+    total = {"input": 0, "cache_read": 0, "cache_write": 0, "output": 0}
+    for record in load_jsonl(compacted):
+        if record.get("type") != "assistant" or record.get("uuid") in seen:
+            continue
+        usage = (record.get("message") or {}).get("usage") or {}
+        total["input"] += usage.get("input_tokens", 0)
+        total["cache_read"] += usage.get("cache_read_input_tokens", 0)
+        total["cache_write"] += usage.get("cache_creation_input_tokens", 0)
+        total["output"] += usage.get("output_tokens", 0)
+    return total
+
+
 def compacted_path(transcript, new_id):
     return Path.home() / ".claude" / "projects" / transcript.parent.name / f"{new_id}.jsonl"
 
@@ -409,6 +425,7 @@ def evaluate(transcript, out):
         (session_dir / f"{mode}.md").write_text(render_compaction(summary, kept), encoding="utf-8")
         entry["session_ids"][mode] = new_id
         entry["cost_usd"][mode] = cost
+        entry.setdefault("tokens", {})[mode] = added_usage(transcript, new_path)
         entry["summary_chars"][mode] = len(summary)
         compactions[mode] = {"text": render_compaction(summary, kept), "framing": summary_mode(summary)}
         if mode == "mod" and summary_mode(summary) != "mod":
@@ -517,10 +534,12 @@ def report(entries):
                 f"mod {entry['summary_chars'].get('mod', 0)} characters"
             )
         if entry["cost_usd"]:
-            lines.append(
-                f"- costs: engine {money(entry['cost_usd'].get('engine'))} / "
-                f"mod {money(entry['cost_usd'].get('mod'))}"
-            )
+            for mode, t in (entry.get("tokens") or {}).items():
+                lines.append(
+                    f"- {mode} run tokens (answer turn; the compaction's own requests aren't in "
+                    f"the transcript): input {t['input']}, cache read {t['cache_read']}, "
+                    f"cache write {t['cache_write']}, output {t['output']}"
+                )
         if entry["status"] == "scored":
             engine, mod = entry["scores"]["engine"], entry["scores"]["mod"]
             lines.append(f"- totals: engine {engine['total']} / mod {mod['total']}")

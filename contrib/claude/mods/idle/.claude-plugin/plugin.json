@@ -10,7 +10,7 @@
         "mod",
         "engine"
       ],
-      "default": "engine",
+      "default": "mod",
       "description": "Who writes compaction summaries: this mod or the engine",
       "title": "Compaction summaries"
     }

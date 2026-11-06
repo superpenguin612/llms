@@ -18,10 +18,9 @@ const COMPACTED = 'Summarize in one sentence; this summary will be replaced.'
 const HEADER =
   'This session is being continued from a previous conversation. The summary below covers the earlier portion of the conversation.\n\nSummary:\n'
 
-const away = atom({ plugin: 'idle', key: 'away' } as const, {} as Away, { shape: 'away-1' })
+const away = atom({ plugin: 'idle', key: 'away' } as const, {} as Away, { shape: 'away-2' })
 
 let ping: Timer | undefined
-let lastTurnEnd: number | undefined
 let prompt: string | undefined
 
 const hhmm = (ms: number) => {
@@ -110,8 +109,10 @@ async function arm($: $, until: number, base: number) {
     ping = undefined
     const { awayUntil } = await read($, away)
     if (awayUntil === undefined) return
-    if (due < awayUntil) await $.prompt.submit({ text: KEEPALIVE })
-    else await clearAway($)
+    if (due < awayUntil) {
+      await update($, away, (s) => ({ ...s, pinging: true }))
+      await $.prompt.submit({ text: KEEPALIVE })
+    } else await clearAway($)
   })
 }
 
@@ -124,6 +125,15 @@ export const register: Register = (on, options) => {
       description: "Keep this session's cache warm until you're back: /away <hours> (max 12), /away off",
     })
     await pruneCompactions($)
+
+    const now = await $.clock.now()
+    const { awayUntil, kind, lastTurnEnd } = await read($, away)
+    if (awayUntil !== undefined && awayUntil > now) {
+      $.ui.status(`${kind === 'warm' ? 'warm' : 'away'} until ${hhmm(awayUntil)}`)
+      await arm($, awayUntil, lastTurnEnd ?? now)
+    } else if (awayUntil !== undefined) {
+      await clearAway($)
+    }
     return next(e)
   })
 
@@ -145,16 +155,22 @@ export const register: Register = (on, options) => {
 
     const now = await $.clock.now()
     const until = now + hours * HOUR_MS
-    await update($, away, () => ({ awayUntil: until }))
+    const { lastTurnEnd } = await update($, away, (s) => ({ ...s, awayUntil: until, kind: 'away' }))
     $.ui.status(`away until ${hhmm(until)}`)
     await arm($, until, lastTurnEnd ?? now)
     return { text: `Away until ${hhmm(until)}: pinging every 50 min to keep the cache warm.` }
   })
 
   on('turn.complete', async ($, e, next) => {
-    lastTurnEnd = await $.clock.now()
-    const { awayUntil } = await read($, away)
-    if (awayUntil !== undefined) await arm($, awayUntil, lastTurnEnd)
+    const now = await $.clock.now()
+    const { pinging, awayUntil } = await update($, away, (s) => ({ ...s, lastTurnEnd: now }))
+    if (pinging) {
+      await update($, away, (s) => ({ ...s, pinging: undefined }))
+      if (awayUntil !== undefined) await arm($, awayUntil, now)
+      else await clearAway($)
+    } else if (awayUntil !== undefined && awayUntil > now) {
+      await arm($, awayUntil, now)
+    }
     return next(e)
   })
 

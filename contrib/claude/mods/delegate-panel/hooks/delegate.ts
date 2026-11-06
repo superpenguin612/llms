@@ -289,11 +289,13 @@ export const doing = (seg: Segment | undefined) => {
 
 // The state line: a finished run's state, or a live one's activity, a spinner frame per second,
 // and stalled once nothing new was logged for STALL_MS. `since` stands in before the first entry.
+// `doing` is that activity without the fallback prefix, for rows whose state word already says it.
 export const activity = (live: boolean, state: string, model: string, seg: Segment | undefined, since: number, now: number) => {
   const last = seg && !Number.isNaN(seg.last) ? seg.last : since
   const idle = Math.max(0, now - last)
-  if (!live) return { text: state, idle, stalled: false, spin: '' }
+  if (!live) return { text: state, doing: '', idle, stalled: false, spin: '' }
   const stalled = idle >= STALL_MS
-  const text = `${state === 'fell back' ? `fell back to ${model} · ` : ''}${doing(seg)}${stalled ? ' · stalled' : ''}`
-  return { text, idle, stalled, spin: stalled ? '!' : SPIN[Math.floor(now / 1000) % SPIN.length]! }
+  const work = `${doing(seg)}${stalled ? ' · stalled' : ''}`
+  const text = `${state === 'fell back' ? `fell back to ${model} · ` : ''}${work}`
+  return { text, doing: work, idle, stalled, spin: stalled ? '!' : SPIN[Math.floor(now / 1000) % SPIN.length]! }
 }

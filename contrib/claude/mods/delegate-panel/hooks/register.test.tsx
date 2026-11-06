@@ -209,17 +209,26 @@ test('a row line pads shared columns and cuts to the pane width', () => {
 test('activity: the running tool, waiting on the model, done, stalled, fell back', () => {
   const lines = OK_SESSION.split('\n')
   const seg = (n: number) => parseSession(lines.slice(0, n).join('\n'))[0]!
-  expect(activity(true, 'running', 'm', seg(5), 0, NOW).text).toBe(
-    'running bash: pwd && ls -la && git status --short && git log --oneline -3',
-  )
+  expect(activity(true, 'running', 'm', seg(5), 0, NOW)).toMatchObject({
+    text: 'running bash: pwd && ls -la && git status --short && git log --oneline -3',
+    doing: 'running bash: pwd && ls -la && git status --short && git log --oneline -3',
+  })
   expect(activity(true, 'running', 'm', seg(5), 0, NOW)).toMatchObject({ idle: 9998, stalled: false })
   expect(activity(true, 'running', 'm', seg(6), 0, NOW).text).toBe('running bash: echo "$DELEGATE_RUN"')
   expect(activity(true, 'running', 'm', seg(7), 0, NOW).text).toBe('waiting on the model')
   expect(activity(true, 'running', 'm', seg(8), 0, NOW).text).toBe('done')
   expect(activity(true, 'running', 'm', undefined, NOW - 5000, NOW)).toMatchObject({ text: 'starting pi', idle: 5000 })
+  // A fell-back run's row shows only what the worker is doing: its state word says the rest.
+  const fell = activity(true, 'fell back', 'm2', seg(7), 0, NOW)
+  expect(fell).toMatchObject({ text: 'fell back to m2 · waiting on the model', doing: 'waiting on the model' })
   const stalled = activity(true, 'fell back', 'm2', seg(7), 0, NOW + 120_000)
-  expect(stalled).toMatchObject({ text: 'fell back to m2 · waiting on the model · stalled', stalled: true, spin: '!' })
-  expect(activity(false, 'timed out', 'm', seg(7), 0, NOW + 120_000)).toMatchObject({ text: 'timed out', stalled: false })
+  expect(stalled).toMatchObject({
+    text: 'fell back to m2 · waiting on the model · stalled',
+    doing: 'waiting on the model · stalled',
+    stalled: true,
+    spin: '!',
+  })
+  expect(activity(false, 'timed out', 'm', seg(7), 0, NOW + 120_000)).toMatchObject({ text: 'timed out', doing: '', stalled: false })
   // Tool calls carry their elapsed time from the log's timestamps.
   expect(seg(6).items[1]).toMatchObject({ started: Date.parse('2026-11-04T16:23:31.002Z'), ended: Date.parse('2026-11-04T16:23:31.023Z') })
 })
@@ -243,7 +252,8 @@ for (const surface of ['terminal', 'desktop'] as const) {
     const rows = await ui.findAll({ type: 'Button' })
     expect(rows.map(b => b.key)).toEqual(['open-live-b', 'open-done-a', 'close'])
     expect(rows[0]?.props.plain).toBe(true)
-    expect(rows[0]?.text).toMatch(/^\S live-b\s+fell back\s+m2\s+1m30s\s+fell back to m2/)
+    expect(rows[0]?.text).toMatch(/^\S live-b\s+fell back\s+m2\s+1m30s\s+running bash: pwd/)
+    expect(rows[0]?.text).not.toContain('fell back to')
     expect(rows[1]?.text).toMatch(/^\S done-a\s+review\s+deepseek\s+48s\s+Added hello\.txt/)
     for (const row of rows.slice(0, 2)) expect(row.text.length).toBeLessThanOrEqual(60)
     expect((await ui.find({ key: 'row-live-b' }))?.props.marginBottom).toBeUndefined()

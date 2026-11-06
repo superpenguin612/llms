@@ -59,7 +59,7 @@ const registerBand: Register = on => {
               word: lk.word,
               model: shortModel(row.model),
               elapsed: duration(row.elapsed),
-              detail: row.live ? row.act.text : (row.result ?? ''),
+              detail: row.live ? row.act.doing : (row.result ?? ''),
             },
             e.props.bodyColumns - (String(i + 1).length + 2),
             w,

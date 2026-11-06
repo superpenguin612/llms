@@ -49,7 +49,7 @@ const fieldsOf = (row: Row, lk: ReturnType<typeof look>): RowFields => ({
   word: lk.word,
   model: shortModel(row.model),
   elapsed: duration(row.elapsed),
-  detail: row.live ? row.act.text : row.result,
+  detail: row.live ? row.act.doing : row.result,
 })
 
 export const register: Register = on => {

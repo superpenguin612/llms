@@ -165,6 +165,26 @@ test('a band row leaves room for its hotkey', async ($, on) => {
   await ui.unmount()
 })
 
+test('a fell-back band row shows what the worker is doing, not the fallback again', async ($, on) => {
+  records = {
+    'live-f': rec('live-f', LIVE, {
+      status: 'running',
+      attempts: [{ model: 'deepseek-v4.1-flash', outcome: 'timeout', seconds: 60, session: null, ...usage }],
+    }),
+  }
+  extraFiles = {
+    [`${R}/live-f/running`]: '4242\n',
+    [`${R}/live-f/sessions/1.jsonl`]: PARTIAL,
+  }
+  seed(on)
+  const ui = await $.ui.mount(BAND(BAND_PROPS))
+  const text = (await ui.find({ key: 'band-live-f' }))?.text ?? ''
+  expect(text).toContain('fell back')
+  expect(text).toContain('running bash: pwd')
+  expect(text).not.toContain('fell back to')
+  await ui.unmount()
+})
+
 test('seven runs leave five rows and a more line', async ($, on) => {
   records = {
     'live-a': rec('live-a', LIVE, { status: 'running' }),

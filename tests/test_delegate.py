@@ -293,8 +293,8 @@ class TestRun(DelegateBase):
 
     def test_shipped_chains(self):
         chains = json.loads((SRC / "chains.json").read_text())
-        self.assertEqual(chains["implementation"], ["deepseek-v4.1-flash", "glm-5.3-flash"])
-        self.assertEqual(chains["bulk"], ["glm-5.3-flash", "claude-haiku-5-5"])
+        self.assertEqual(chains["implementation"], ["deepseek-v4.1-flash"])
+        self.assertEqual(chains["bulk"], ["deepseek-v4.1-flash"])
 
     def test_failed_start_leaves_nothing_behind(self):
         self.chains(implementation=["ok-a"])

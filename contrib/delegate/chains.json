@@ -1,2 +1,2 @@
-{"implementation": ["deepseek-v4.1-flash", "glm-5.3-flash"],
- "bulk": ["glm-5.3-flash", "claude-haiku-5-5"]}
+{"implementation": ["deepseek-v4.1-flash"],
+ "bulk": ["deepseek-v4.1-flash"]}

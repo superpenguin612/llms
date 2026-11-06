@@ -101,7 +101,7 @@ async function clearAway($: $) {
 async function arm($: $, until: number, base: number) {
   ping?.cancel()
   const due = base + PING_MS
-  const wait = Math.max(0, due - (await $.clock.now()))
+  const wait = Math.max(0, Math.min(due, until) - (await $.clock.now()))
   ping = $.clock.after(wait, async () => {
     ping = undefined
     const { awayUntil } = await read($, away)

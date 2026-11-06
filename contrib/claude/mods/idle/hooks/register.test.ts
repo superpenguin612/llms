@@ -157,13 +157,16 @@ test('a turn re-arms the ping and it submits the keepalive prompt', async ($, on
   expect(statuses.at(-1)).toMatch(/^away until /)
 })
 
-test('an away shorter than the ping is cleared without a prompt', async ($, on) => {
+test('an away shorter than the ping is cleared when its window ends', async ($, on) => {
   const { clock, statuses, submitted } = seed(on)
   await start($)
   await $.command.run({ command: 'away', args: '0.5' })
   await turn($)
 
-  await clock.advance(PING)
+  await clock.advance(30 * 60 * 1000 - 1)
+  expect(statuses.at(-1)).toMatch(/^away until /)
+
+  await clock.advance(1)
   expect(submitted).toEqual([])
   expect(statuses.at(-1)).toBeUndefined()
 })

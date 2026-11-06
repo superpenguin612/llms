@@ -232,6 +232,13 @@ export const register: Register = on => {
             {tokLine(row.total)}
           </Text>
         </Box>
+        {row.live && (
+          <Box flexDirection="row">
+            <Text color={lk.color}>{lk.icon} </Text>
+            <Text color={lk.color}>{row.act.text}</Text>
+            <Text dimColor> · {ago(row.act.idle)}</Text>
+          </Box>
+        )}
         <Text dimColor>
           {usage ? `attempt: ${tokens(usage)} · ` : ''}run: {tokens(row.total)}
         </Text>
@@ -267,6 +274,9 @@ export const register: Register = on => {
         {/* Following keeps the view at its end, so its state and the way back stay at the bottom. */}
         <Box key="status-end" flexDirection="row">
           <Text color={lk.color}>{lk.word}</Text>
+          {row.live && (
+            <Text dimColor wrap="truncate-end"> · {row.act.doing}</Text>
+          )}
           <Text dimColor> · {isFollowing ? 'following' : 'paused'} · </Text>
           <Button key="back" hotkey="b" plain dimColor onPress={back}>
             back

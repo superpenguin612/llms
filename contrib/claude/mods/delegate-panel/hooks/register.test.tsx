@@ -294,6 +294,9 @@ for (const surface of ['terminal', 'desktop'] as const) {
     expect((await ui.find({ type: 'Text', text: '✓' }))?.props.color).toBe('success')
     expect((await ui.find({ type: 'Text', text: 'review' }))?.props.color).toBe('success')
     expect(await ui.find({ type: 'Text', text: / · following · / })).toMatchObject({ props: { dimColor: true } })
+    // A finished run has no live activity line, in the body or the footer.
+    expect(await ui.find({ type: 'Text', text: /last activity/ })).toBeUndefined()
+    expect(await ui.find({ type: 'Text', text: /^ · running / })).toBeUndefined()
 
     const keys = (await ui.findAll({ type: 'Button' })).map(b => b.key)
     expect(keys.slice(0, 3)).toEqual(['attempt-0', 'attempt-1', 'attempt-2'])
@@ -338,6 +341,17 @@ for (const surface of ['terminal', 'desktop'] as const) {
     expect(await ui.find({ type: 'Text', text: /… running 10s/ })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: /^attempt: in 2\.0k · out 134 · cache read 256 · cache write 0 · total 2\.4k.* · run: .*total 2\.4k/ })).toBeDefined()
     expect((await ui.find({ type: 'Text', text: 'fell back' }))?.props.color).toBe('warning')
+    // Under the title, the live worker's activity and how long ago it was last logged.
+    const live = activity(true, 'fell back', 'm2', parseSession(PARTIAL)[0], 0, NOW)
+    expect((await ui.find({ type: 'Text', text: live.text }))?.props.color).toBe('warning')
+    expect(await ui.find({ type: 'Text', text: /^ · last activity 10s ago$/ })).toMatchObject({
+      props: { dimColor: true },
+    })
+    // The footer carries the same activity without the fallback prefix.
+    const escaped = live.doing.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    expect(await ui.find({ type: 'Text', text: new RegExp(`^ · ${escaped}$`) })).toMatchObject({
+      props: { dimColor: true, wrap: 'truncate-end' },
+    })
     await ui.press({ key: 'follow' })
     expect(statuses.at(-1)).toMatch(/no implementation for ui.scroll/)
     await ui.unmount()

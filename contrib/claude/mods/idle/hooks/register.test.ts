@@ -10,6 +10,9 @@ const HOUR = 60 * 60 * 1000
 const PING = 50 * 60 * 1000
 const KEEPALIVE = 'keepalive: reply "ok" only'
 const PROMPT = 'Write a summary of this conversation so far for a fresh context that continues the work.'
+const COMPACTED = 'Summarize in one sentence; this summary will be replaced.'
+const HEADER =
+  'This session is being continued from a previous conversation. The summary below covers the earlier portion of the conversation.\n\nSummary:\n'
 
 const hhmm = (ms: number) => {
   const at = new Date(ms)
@@ -47,6 +50,8 @@ const transcript = [
   message('assistant', 'a4'),
 ]
 
+const uses = { input: 1, output: 2, cache_read: 3, cache_write: 0, cost: 0.001 }
+
 const engine = (on: On, seen: SessionCompactInput[]) =>
   on('session.compact', (_, e) => {
     seen.push(e)
@@ -59,6 +64,7 @@ const seed = (on: On, entries: readonly FsEntry[] = []) => {
   const removed: string[] = []
   const commands: string[] = []
   const writes: { path: string; text: string }[] = []
+  const forks: string[] = []
   const clock = mock.clock(on, { now: NOW })
   mock.env(on, { HOME })
   on('command.register', (_, e) => {
@@ -90,7 +96,7 @@ const seed = (on: On, entries: readonly FsEntry[] = []) => {
     removed.push(...e.argv)
     return { value: { exitCode: 0, stdout: '', stderr: '' } }
   })
-  return { clock, statuses, submitted, removed, commands, writes }
+  return { clock, statuses, submitted, removed, commands, writes, forks }
 }
 
 const start = ($: Parameters<Parameters<typeof test>[1]>[0]) =>
@@ -226,3 +232,107 @@ test('a subagent compaction is left untouched and saves nothing', async ($, on) 
   expect(statuses).toEqual([])
 })
 
+test(
+  'mod compaction keeps the last two real prompts and saves the fork summary',
+  { options: { compaction: 'mod' } },
+  async ($, on) => {
+    const { statuses, writes } = seed(on)
+    const seen: SessionCompactInput[] = []
+    const prompts: string[] = []
+    on('model.fork', (_, e) => {
+      prompts.push(e.prompt)
+      return { value: { isAnswered: true, text: 'S', usage: uses } }
+    })
+    engine(on, seen)
+    await start($)
+
+    const result = await $.session.compact({
+      trigger: 'manual',
+      instructions: 'keep the API notes',
+      messages: transcript,
+    })
+
+    expect(transcript.slice(-2)[0]!.toolResults).toHaveLength(1)
+    expect(seen).toHaveLength(1)
+    expect(seen[0]!.messages).toEqual(transcript.slice(4))
+    expect(seen[0]!.messages[0]!.text).toBe('second request')
+    expect(seen[0]!.instructions).toBe(COMPACTED)
+    expect(prompts[0]).toContain(PROMPT)
+    expect(prompts[0]).toContain('The user asked to keep or stress: keep the API notes')
+    expect(result.messages[0]).toEqual({ role: 'user', text: HEADER + 'S', toolUses: [] })
+    expect(result.messages.slice(1)).toEqual(transcript.slice(4))
+    expect(writes).toEqual([{ path, text: 'S' }])
+    expect(statuses.at(-1)).toBe(`compacted at ${hhmm(NOW)}`)
+  },
+)
+
+test(
+  'mod compaction takes the engine path when the fork did not answer',
+  { options: { compaction: 'mod' } },
+  async ($, on) => {
+    const { writes } = seed(on)
+    const seen: SessionCompactInput[] = []
+    on('model.fork', () => ({ value: { isAnswered: false, reason: 'nothing-to-fork' } }))
+    engine(on, seen)
+    await start($)
+
+    const result = await $.session.compact({
+      trigger: 'manual',
+      instructions: 'keep the API notes',
+      messages: transcript,
+    })
+
+    expect(seen).toHaveLength(1)
+    expect(seen[0]!.instructions).toMatch(/^The user asked to keep or stress: keep the API notes/)
+    expect(seen[0]!.instructions).toContain(PROMPT)
+    expect(result.messages[0]!.text).toBe('ENGINE SUMMARY')
+    expect(writes).toEqual([{ path, text: 'ENGINE SUMMARY' }])
+  },
+)
+
+test(
+  'mod compaction skips precompute',
+  { options: { compaction: 'mod' } },
+  async ($, on) => {
+    const { statuses, writes } = seed(on)
+    const seen: SessionCompactInput[] = []
+    engine(on, seen)
+    await start($)
+
+    const result = await $.session.compact({ trigger: 'precompute', messages: transcript })
+
+    expect(result).toEqual({ skip: 'idle mod writes the summary' })
+    expect(seen).toEqual([])
+    expect(writes).toEqual([])
+    expect(statuses).toEqual([])
+  },
+)
+
+test(
+  'mod compaction falls back to the plain engine path when the engine refuses the tail',
+  { options: { compaction: 'mod' } },
+  async ($, on) => {
+    const { writes } = seed(on)
+    const seen: SessionCompactInput[] = []
+    on('model.fork', () => ({ value: { isAnswered: true, text: 'S', usage: uses } }))
+    on('session.compact', (_, e) => {
+      seen.push(e)
+      if (e.instructions === COMPACTED) return { skip: 'Not enough messages to compact.' }
+      return { messages: [message('user', 'ENGINE SUMMARY'), ...e.messages.slice(-2)] }
+    })
+    await start($)
+
+    const result = await $.session.compact({
+      trigger: 'manual',
+      instructions: 'keep the API notes',
+      messages: transcript,
+    })
+
+    expect(seen).toHaveLength(2)
+    expect(seen[0]!.messages).toEqual(transcript.slice(4))
+    expect(seen[1]!.messages).toEqual(transcript)
+    expect(seen[1]!.instructions).toMatch(/^The user asked to keep or stress: keep the API notes/)
+    expect(result.messages[0]!.text).toBe('ENGINE SUMMARY')
+    expect(writes).toEqual([{ path, text: 'ENGINE SUMMARY' }])
+  },
+)

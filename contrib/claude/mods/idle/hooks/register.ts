@@ -1,5 +1,5 @@
 import { atom, read, update } from 'claude-code'
-import type { EngineInterface, Register, SessionCompactResult, Timer } from 'claude-code'
+import type { EngineInterface, Register, SessionCompactResult, SessionMessage, Timer } from 'claude-code'
 
 import type { Away } from '../types'
 
@@ -14,6 +14,9 @@ const MAX_HOURS = 12
 const KEEPALIVE = 'keepalive: reply "ok" only'
 const USAGE = 'Usage: /away <hours> (max 12), /away 1.5h, or /away off.'
 const LIMIT = 'Hours must be a number over 0 and at most 12: /away 2, /away 1.5h, or /away off.'
+const COMPACTED = 'Summarize in one sentence; this summary will be replaced.'
+const HEADER =
+  'This session is being continued from a previous conversation. The summary below covers the earlier portion of the conversation.\n\nSummary:\n'
 
 const away = atom({ plugin: 'idle', key: 'away' } as const, {} as Away, { shape: 'away-1' })
 
@@ -36,6 +39,22 @@ const slug = (cwd: string) => cwd.replace(/^\//, '').replace(/\//g, '-')
 
 const withPerson = (text: string, own: string) =>
   own === '' ? text : `The user asked to keep or stress: ${own}\n\n${text}`
+
+const withExtra = (text: string, own: string) =>
+  own === '' ? text : `${text}\n\nThe user asked to keep or stress: ${own}`
+
+// The last prompt and everything after it, or from the second-to-last real prompt.
+function tailOf(messages: readonly SessionMessage[]) {
+  const prompts: number[] = []
+  messages.forEach((message, index) => {
+    const isPrompt =
+      message.role === 'user' && !message.toolResults?.length && message.text.trim() !== ''
+    if (isPrompt) prompts.push(index)
+  })
+  if (prompts.length === 0) return []
+  const start = prompts.length >= 2 ? prompts[prompts.length - 2]! : prompts[prompts.length - 1]!
+  return messages.slice(start)
+}
 
 async function summaryPrompt($: $) {
   prompt ??= await $.fs.read(`${$.plugin.root}/hooks/summary-prompt.md`)
@@ -92,7 +111,9 @@ async function arm($: $, until: number, base: number) {
   })
 }
 
-export const register: Register = on => {
+export const register: Register = (on, options) => {
+  const compaction = options.compaction === 'mod' ? 'mod' : 'engine'
+
   on('session.start', async ($, e, next) => {
     await $.command.register({
       name: 'away',
@@ -135,11 +156,46 @@ export const register: Register = on => {
 
   on('session.compact', async ($, e, next) => {
     if (e.agentId !== undefined) return next(e)
-    if (e.trigger === 'precompute') return next(e)
+    if (compaction === 'engine' && e.trigger === 'precompute') return next(e)
+    if (compaction === 'mod' && e.trigger === 'precompute') {
+      return { skip: 'idle mod writes the summary' }
+    }
 
     const text = await summaryPrompt($)
     const own = e.instructions?.trim() ?? ''
-    const r = await next({ ...e, instructions: withPerson(text, own) })
+    const instructions = withPerson(text, own)
+
+    if (compaction === 'engine') {
+      const r = await next({ ...e, instructions })
+      await saveCompacted($, r)
+      return r
+    }
+
+    const tail = tailOf(e.messages)
+    if (tail.length >= 2) {
+      const reply = await $.model
+        .fork({ prompt: withExtra(text, own) })
+        .catch(() => undefined)
+      if (reply?.isAnswered) {
+        let r: SessionCompactResult | undefined
+        try {
+          r = await next({ ...e, messages: tail, instructions: COMPACTED })
+        } catch {
+          r = undefined
+        }
+        if (r !== undefined && r.skip === undefined) {
+          await saveSummary($, reply.text)
+          const summary: SessionMessage = {
+            role: 'user',
+            text: HEADER + reply.text,
+            toolUses: [],
+          }
+          return { ...r, messages: [summary, ...tail] }
+        }
+      }
+    }
+
+    const r = await next({ ...e, instructions })
     await saveCompacted($, r)
     return r
   })

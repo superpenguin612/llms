@@ -272,23 +272,25 @@ export const register: Register = on => {
           </Box>
         )}
         {/* Following keeps the view at its end, so its state and the way back stay at the bottom. */}
-        <Box key="status-end" flexDirection="row">
-          <Text color={lk.color}>{lk.word}</Text>
-          {row.live && (
-            <Text dimColor wrap="truncate-end"> · {row.act.doing}</Text>
-          )}
-          <Text dimColor> · {isFollowing ? 'following' : 'paused'} · </Text>
-          <Button key="back" hotkey="b" plain dimColor onPress={back}>
-            back
-          </Button>
-          <Text dimColor> · </Text>
-          <Button key="follow" hotkey="e" plain dimColor onPress={() => follow($)}>
-            follow
-          </Button>
-          <Text dimColor> · </Text>
-          <Button key="close" hotkey="q" plain dimColor onPress={() => $.ui.close({ id: PANE })}>
-            close
-          </Button>
+        <Box key="status-end" flexDirection="column">
+          <Text color={lk.color} wrap="truncate-end">
+            {lk.word}
+            {row.live && <Text dimColor> · {row.act.doing}</Text>}
+            <Text dimColor> · {isFollowing ? 'following' : 'paused'}</Text>
+          </Text>
+          <Box flexDirection="row" columnGap={1}>
+            <Button key="back" hotkey="b" plain dimColor onPress={back}>
+              back
+            </Button>
+            <Text dimColor>·</Text>
+            <Button key="follow" hotkey="e" plain dimColor onPress={() => follow($)}>
+              follow
+            </Button>
+            <Text dimColor>·</Text>
+            <Button key="close" hotkey="q" plain dimColor onPress={() => $.ui.close({ id: PANE })}>
+              close
+            </Button>
+          </Box>
         </Box>
       </Box>
     )

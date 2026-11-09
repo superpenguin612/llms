@@ -1,0 +1,70 @@
+#!/usr/bin/env bash
+# pdfpane FILE [PAGE]: show a PDF page (or an image) in a tmux side pane, drawn with timg as sixel.
+# Running it again reuses the pane. The pane redraws when the file changes or the pane is resized.
+# Keys in the pane: j/n/space next page, k/p previous, g first, G last, r redraw, q close.
+set -euo pipefail
+
+die() { echo "pdfpane: $*" >&2; exit 1; }
+
+page_count() {
+  if [[ $1 == *.pdf ]]; then pdfinfo "$1" 2>/dev/null | awk '/^Pages:/ {print $2}'; else echo 1; fi
+}
+
+view() {
+  local file=$1 page=$2 last="" redraw=0 pages key
+  trap 'redraw=1' WINCH
+  while :; do
+    local mtime
+    mtime=$(stat -c %Y "$file" 2>/dev/null || echo missing)
+    if [[ $mtime != "$last" ]]; then
+      sleep 0.5  # let a build finish writing before reading it
+      mtime=$(stat -c %Y "$file" 2>/dev/null || echo missing)
+      redraw=1
+    fi
+    if (( redraw )); then
+      redraw=0 last=$mtime
+      pages=$(page_count "$file"); pages=${pages:-1}
+      (( page > pages )) && page=$pages
+      (( page < 1 )) && page=1
+      clear
+      if [[ $mtime == missing ]]; then
+        echo "waiting for $file"
+      else
+        local frames=()
+        [[ $file == *.pdf ]] && frames=(--frame-offset=$((page - 1)) --frames=1)
+        timg -ps -g "$(tput cols)x$(( $(tput lines) - 1 ))" "${frames[@]}" "$file" 2>/dev/null || echo "cannot draw $file"
+        printf '%s  page %d/%d  [j/k g/G r q]' "$(basename "$file")" "$page" "$pages"
+      fi
+    fi
+    if read -rsn1 -t 1 key; then
+      case $key in
+        j|n|' ') (( page < pages )) && { page=$((page + 1)); redraw=1; } ;;
+        k|p) (( page > 1 )) && { page=$((page - 1)); redraw=1; } ;;
+        g) page=1 redraw=1 ;;
+        G) page=$pages redraw=1 ;;
+        r) redraw=1 ;;
+        q) exit 0 ;;
+      esac
+    fi
+  done
+}
+
+if [[ ${1:-} == --view ]]; then view "$2" "$3"; exit; fi
+
+[[ $# -ge 1 && $# -le 2 ]] || die "usage: pdfpane FILE [PAGE]"
+[[ -n ${TMUX:-} ]] || die "not inside tmux"
+file=$(realpath "$1")
+page=${2:-1}
+[[ $page =~ ^[0-9]+$ ]] || die "PAGE must be a number"
+self=$(realpath "$0")
+here=${TMUX_PANE:-$(tmux display -p '#{pane_id}')}
+cmd=$(printf '%q --view %q %q' "$self" "$file" "$page")
+
+pane=$(tmux list-panes -t "$here" -F '#{pane_id} #{@pdfpane}' | awk '$2 == 1 {print $1; exit}')
+if [[ -n $pane ]]; then
+  tmux respawn-pane -k -t "$pane" "$cmd"
+else
+  pane=$(tmux split-window -h -d -l 45% -t "$here" -P -F '#{pane_id}' "$cmd")
+  tmux set -p -t "$pane" @pdfpane 1
+fi
+echo "pdfpane: $file page $page in pane $pane"

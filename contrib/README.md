@@ -53,3 +53,15 @@ delegate clean fix-parser                        # after merging; --force abando
 
 On a timeout or API error the next model in the chain starts over from the base commit, and the
 failed attempt's commits stay on `delegate/<task>@<model>` until `clean`. Run folders are kept.
+
+## pdfpane
+
+Shows a PDF page or an image in a tmux pane beside the current one, drawn with `timg` as sixel
+(tmux 3.4+ passes sixel through natively; iTerm2, WezTerm and foot draw it). Running it again
+reuses the pane, so an agent can point it at whatever it just built. The pane redraws when the file
+changes, so it follows rebuilds. Needs `timg` and `pdfinfo` (`apt install timg poppler-utils`).
+
+```sh
+ln -sf "$PWD/pdfpane" ~/.local/bin/pdfpane
+pdfpane build/report.pdf 3        # page 3; keys in the pane: j/k next/previous, g/G first/last, r, q
+```

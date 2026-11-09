@@ -11,7 +11,7 @@ map="$tmp/state/agent-ping/panes.tsv"
 unset TMUX TMUX_PANE
 t() { tmux -L "$L" "$@"; }
 t kill-server 2>/dev/null
-trap 't kill-server 2>/dev/null; [ -f "$tmp/sleep.pid" ] && kill "$(cat "$tmp/sleep.pid")"; rm -rf "$tmp"' EXIT
+trap 't kill-server 2>/dev/null; kill $(cat "$tmp"/sleep*.pid 2>/dev/null) 2>/dev/null; rm -rf "$tmp"' EXIT
 fail=0
 check() { # check NAME GOT WANT(ERE)
 	if printf '%s\n' "$2" | grep -Eq "^($3)\$"; then echo "ok   $1"; else echo "FAIL $1: got '$2', want '$3'"; fail=1; fi
@@ -48,7 +48,23 @@ check "count 0" "$(n)" 0
 hook "$p0" claude "{$c,\"hook_event_name\":\"Notification\",\"notification_type\":\"auth_success\",\"message\":\"m\"}"
 check "other notification ignored" "$(w "$p0")" ''
 hook "$p0" claude "{$c,\"hook_event_name\":\"Notification\",\"notification_type\":\"elicitation_dialog\",\"message\":\"m\"}"
-check "elicitation is a question" "$(w "$p0")" '[0-9]+\|question'
+check "elicitation is an ask" "$(w "$p0")" '[0-9]+\|ask'
+check "asks counted apart" "$(t show -gqv @agents_asking) $(n)" '1 0'
+hook "$p0" claude "{$c,\"hook_event_name\":\"Notification\",\"notification_type\":\"permission_prompt\",\"message\":\"m\"}"
+check "permission keeps an ask" "$(w "$p0")" '[0-9]+\|ask'
+hook "$p0" claude "{$c,\"hook_event_name\":\"Stop\",\"stop_hook_active\":false}"
+check "stop keeps an ask" "$(w "$p0")" '[0-9]+\|ask'
+hook "$p0" claude "{$c,\"hook_event_name\":\"UserPromptSubmit\",\"prompt\":\"answer\"}"
+check "prompt clears an ask" "$(w "$p0")" ''
+check "prompt starts the turn" "$(t show -pqv -t "$p0" @agent_turn_start)" '[0-9]{5,}'
+hook "$p0" claude "{$c,\"hook_event_name\":\"PreToolUse\",\"tool_name\":\"AskUserQuestion\",\"tool_input\":{\"questions\":[{\"question\":\"Q1?\"},{\"question\":\"Q2?\"}]}}"
+check "dialog is an ask" "$(w "$p0")" '[0-9]+\|ask'
+hook "$p0" claude "{$c,\"hook_event_name\":\"UserPromptSubmit\",\"prompt\":\"a\"}"
+hook "$p0" claude "{$c,\"hook_event_name\":\"Notification\",\"notification_type\":\"idle_prompt\",\"message\":\"m\"}"
+check "idle marks" "$(w "$p0")" '[0-9]+\|idle'
+TMUX="$sock,0,0" TMUX_PANE="$p0" CLAUDECODE=1 "$ap" ask "need a hand" >>"$out" </dev/null
+check "ask command marks" "$(w "$p0")" '[0-9]+\|ask'
+hook "$p0" claude "{$c,\"hook_event_name\":\"UserPromptSubmit\",\"prompt\":\"a\"}"
 hook "$p0" claude "{$c,\"hook_event_name\":\"Stop\",\"stop_hook_active\":false}"
 check "stop marks done" "$(w "$p0")" '[0-9]+\|done'
 hook "$p0" claude "{$c,\"hook_event_name\":\"UserPromptSubmit\",\"prompt\":\"keepalive: reply \\\"ok\\\" only\"}"
@@ -76,20 +92,28 @@ check "map rows" "$(cut -f1-5 "$map" | sort | tr '\t\n' ' ')" 's 0 0 claude id-c
 hook "$p2" claude '{"session_id":"id-quit","hook_event_name":"SessionEnd","reason":"prompt_input_exit"}'
 check "quit drops row" "$(grep -c id-quit "$map")" 0
 
-before=$(t show -wqv -t "$p3" @agent_waiting)
 printf '{"session_id":"z","hook_event_name":"Stop"}' | TMUX="$sock,0,0" "$ap" claude >>"$out"
 check "outside tmux does nothing" "$(grep -c '	z$' "$map")" 0
 check "stdout empty" "$(wc -c <"$out" | tr -d ' ')" 0
 
-# A client looking at window 0's active pane: no mark there.
+# Two clients: a plain one (OSC 9) and one that answers tmux's XTVERSION query as iTerm2.
 { sleep 600 & echo $! >"$tmp/sleep.pid"; wait; } | script -qc "TERM=xterm tmux -L $L attach -t s" /dev/null >"$tmp/client.out" 2>&1 &  # stdin open: EOF would type ^D into the pane
-i=0; while [ -z "$(t list-clients)" ] && [ $i -lt 50 ]; do sleep 0.1; i=$((i + 1)); done
+{ sleep 0.5; printf '\033P>|iTerm2 3.7.6\033\\'; sleep 600 & echo $! >"$tmp/sleep2.pid"; wait; } | script -qc "TERM=xterm tmux -L $L attach -t s" /dev/null >"$tmp/iterm.out" 2>&1 &
+i=0; while [ "$(t list-clients -F '#{client_termtype}' | grep -c iTerm2)" = 0 ] && [ $i -lt 50 ]; do sleep 0.1; i=$((i + 1)); done
+check "iTerm2 client seen" "$(t list-clients -F '#{client_termtype}' | grep -c iTerm2)" 1
 t select-window -t s:0
 hook "$p0" claude "{$c,\"hook_event_name\":\"Stop\"}"
 check "focused pane not marked" "$(w "$p0")" ''
-hook "$p2" claude "{$c,\"hook_event_name\":\"Stop\"}"
+hook "$p2" claude "{$c,\"hook_event_name\":\"UserPromptSubmit\",\"prompt\":\"a\"}"
+hook "$p2" claude "{$c,\"hook_event_name\":\"Stop\",\"last_assistant_message\":\"short\"}"
 check "unfocused window still marked" "$(w "$p2")" '[0-9]+\|done'
-check "banner on client tty" "$(grep -c "$(printf '\033]9;s:2 done\007')" "$tmp/client.out")" '[1-9]'
+check "short turn: no banner" "$(grep -c 'short' "$tmp/client.out")" 0
+t set -p -t "$p2" @agent_turn_start $(($(date +%s) - 200))
+hook "$p2" claude "{$c,\"hook_event_name\":\"Stop\",\"last_assistant_message\":\"\\nAll green.\\nmore\"}"
+check "long turn: OSC 9 banner" "$(grep -c "$(printf '\033]9;Claude done · s:2 · 3m: All green.\007')" "$tmp/client.out")" '[1-9]'
+pl=$(grep -ao 'Custom=id=agent-ping:[A-Za-z0-9+/=]*' "$tmp/iterm.out" | tail -1 | cut -d: -f2 | base64 -d)
+check "long turn: iTerm2 payload" "$(printf '%s' "$pl" | jq -r '[.title, .body] | join("|")')" 'Claude done · s:2 · 3m\|All green\.'
+check "iTerm2 client gets no OSC 9" "$(grep -c "$(printf '\033]9;')" "$tmp/iterm.out")" 0
 
 s=$(date +%s%N); hook "$p1" codex "{$x,\"hook_event_name\":\"Stop\"}"; ms=$((($(date +%s%N) - s) / 1000000))
 check "hook under 100 ms (${ms} ms)" "$([ $ms -lt 100 ] && echo y)" y

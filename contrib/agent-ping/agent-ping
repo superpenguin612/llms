@@ -1,5 +1,6 @@
 #!/bin/sh
 # agent-ping claude|codex   hook mode: hook JSON on stdin; marks the tmux window when the agent waits on me
+# agent-ping ask TEXT...    an agent asks for my attention (run from its shell)
 # agent-ping restore        after a resurrect restore: resume each recorded agent in its pane
 # Hook mode is silent on stdout (hooks may read it as context) and always exits 0.
 map="${XDG_STATE_HOME:-$HOME/.local/state}/agent-ping/panes.tsv"
@@ -22,17 +23,34 @@ fi
 
 [ -n "$TMUX_PANE" ] || exit 0
 exec >/dev/null 2>&1
-agent=$1
 pane=$TMUX_PANE
+now=$(date +%s)
 
-# One jq call; the prompt itself never leaves jq (it may hold tabs and newlines).
-IFS="$(printf '\t')" read -r event ntype sid keepalive reason <<EOF
-$(jq -r '[.hook_event_name, (.notification_type // "-"), (.session_id // "-"),
-  ((.prompt // "") | startswith("keepalive:")), (.reason // "-")] | @tsv')
+if [ "$1" = ask ]; then
+	shift
+	event=Ask ntype=- sid=- keepalive=false reason=-
+	text=$(printf '%s' "$*" | tr '\t\n' '  ' | cut -c1-200)
+	if [ -n "$CLAUDECODE" ]; then agent=claude; elif [ -n "$CODEX_THREAD_ID" ]; then agent=codex; else agent=agent; fi
+else
+	agent=$1
+	# One jq call; the prompt itself never leaves jq (it may hold tabs and newlines). Text is last
+	# and flattened, so read gives it the rest of the line.
+	IFS="$(printf '\t')" read -r event ntype sid keepalive reason text <<EOF
+$(jq -r 'def flat: gsub("[\t\n\r]+"; " ") | .[0:200];
+  [.hook_event_name, (.notification_type // .tool_name // "-"), (.session_id // "-"),
+  ((.prompt // "") | startswith("keepalive:")), (.reason // "-"),
+  ((if .hook_event_name == "PreToolUse" then
+      (.tool_input.questions // []) as $q | ($q[0].question // "")
+        + (if ($q | length) > 1 then " (+\(($q | length) - 1) more)" else "" end)
+    elif .hook_event_name == "Stop" then
+      (.last_assistant_message // "") | split("\n") | map(select(test("\\S"))) | (.[0] // "")
+    else .message // "" end) | flat | if . == "" then "-" else . end)] | @tsv')
 EOF
+fi
+[ "$text" = - ] && text=
 
-IFS="$(printf '\t')" read -r sess win pidx shown <<EOF
-$(tmux display -p -t "$pane" '#{session_name}	#{window_index}	#{pane_index}	#{&&:#{pane_active},#{&&:#{window_active},#{session_attached}}}')
+IFS="$(printf '\t')" read -r sess win pidx shown wname <<EOF
+$(tmux display -p -t "$pane" '#{session_name}	#{window_index}	#{pane_index}	#{&&:#{pane_active},#{&&:#{window_active},#{session_attached}}}	#{window_name}')
 EOF
 
 # D38: remember which conversation runs in this pane, for agent-ping restore.
@@ -51,15 +69,20 @@ if [ "$sid" != - ]; then
 	} >"$map.$$" && mv "$map.$$" "$map"
 fi
 
-why=
+case $(tmux show -wqv -t "$pane" @agent_waiting) in *'|ask') asking=1 ;; *) asking= ;; esac
+why='' banner='' took=''
 case $event:$ntype in
-Notification:permission_prompt | PermissionRequest:*) why=permission ;;
-Notification:elicitation_dialog | Notification:idle_prompt) why=question ;;
+PreToolUse:AskUserQuestion | Notification:elicitation_dialog | Ask:*) why=ask banner=1 ;;
+Notification:permission_prompt | PermissionRequest:*) why=permission banner=1 ;;
+Notification:idle_prompt) why=idle ;;
 Stop:*)
 	if [ -n "$(tmux show -pqv -t "$pane" @agent_keepalive)" ]; then
 		tmux set -pu -t "$pane" @agent_keepalive
 	else
-		why=done
+		why='done'
+		start=$(tmux show -pqv -t "$pane" @agent_turn_start)
+		# D42: only a long turn sends a banner.
+		[ -n "$start" ] && [ $((now - start)) -ge 120 ] && banner=1 took=$(((now - start) / 60))m
 	fi
 	;;
 UserPromptSubmit:*)
@@ -68,21 +91,37 @@ UserPromptSubmit:*)
 		tmux set -p -t "$pane" @agent_keepalive 1
 	else
 		tmux set -wu -t "$pane" @agent_waiting
+		tmux set -p -t "$pane" @agent_turn_start "$now"
 	fi
 	;;
 SessionEnd:*) tmux set -wu -t "$pane" @agent_waiting ;;
 esac
 
 # I'm already looking at this pane: no mark, no banner.
-[ -n "$why" ] && [ "$shown" = 1 ] && why=
-[ -n "$why" ] && tmux set -w -t "$pane" @agent_waiting "$(date +%s)|$why"
+[ "$shown" = 1 ] && why=
+[ -n "$why" ] || banner=
+# D43: an open ask outranks every other mark; only a prompt or SessionEnd clears it.
+[ -n "$why" ] && { [ "$why" = ask ] || [ -z "$asking" ]; } && tmux set -w -t "$pane" @agent_waiting "$now|$why"
+[ -n "$asking" ] && [ "$why" = permission ] && banner=
 
-tmux set -g @agents_waiting "$(tmux list-windows -a -F '#{@agent_waiting}' | grep -c .)"
+marks=$(tmux list-windows -a -F '#{@agent_waiting}')
+tmux set -g @agents_asking "$(printf '%s\n' "$marks" | grep -c '|ask$')"
+tmux set -g @agents_waiting "$(printf '%s\n' "$marks" | grep -c '|[^a]')"
 
-if [ -n "$why" ]; then
-	# OSC 9 straight to each client's terminal (bypasses tmux); iTerm2 shows it as a banner.
-	tmux list-clients -F '#{client_tty}' | while read -r tty; do
-		printf '\033]9;%s:%s %s\007' "$sess" "$win" "$why" >"$tty"
-	done
-fi
+[ -n "$banner" ] || exit 0
+case $agent in claude) who=Claude ;; codex) who=Codex ;; *) who=Agent ;; esac
+case $why in
+ask) title="$who asks · $sess:$win" ;;
+permission) title="$who needs permission · $sess:$win" ;;
+*) title="$who done · $sess:$win · $took" ;;
+esac
+# D44: iTerm2 gets a payload for the agent_ping.py script (title, subtitle, body); others get OSC 9.
+payload=$(jq -nc --arg t "$title" --arg s "$wname" --arg b "$text" '{title: $t, subtitle: $s, body: $b}' | base64 | tr -d '\n')
+tmux list-clients -F '#{client_tty}	#{client_termtype}' | while IFS="$(printf '\t')" read -r tty term; do
+	case $term in
+	iTerm2*) printf '\033]1337;Custom=id=agent-ping:%s\007' "$payload" >"$tty" ;;
+	*) printf '\033]9;%s\007' "$title${text:+: $text}" >"$tty" ;;
+	esac
+	tmux display -c "$tty" -d 5000 -l "$([ "$why" = ask ] && echo '?' || echo '●') $title${text:+ — $text}"
+done
 exit 0

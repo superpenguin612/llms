@@ -78,11 +78,17 @@ Marks the tmux window where Claude Code or Codex is waiting on me (a permission 
 a finished turn), keeps a count of waiting windows, and sends a banner to my Mac. POSIX sh + jq;
 always exits 0, prints nothing, takes ~30 ms, and does nothing outside tmux.
 
-- Sets the window option `@agent_waiting` to `<epoch>|<reason>` (`permission`, `question`,
-  `done`) and the global `@agents_waiting` to the number of marked windows, for the status bar.
-- Writes OSC 9 (`<session>:<window> <reason>`) to each attached client's tty; iTerm2 shows it as
-  a Notification Center banner. Nothing is marked or sent when the pane is the active pane of a
-  window a client is showing.
+- Reasons: `ask` (Claude's `AskUserQuestion` dialog via PreToolUse, an MCP `elicitation_dialog`,
+  or `agent-ping ask TEXT` run by any agent), `permission`, `idle` (Claude's 60 s idle notice) and
+  `done` (`Stop`). Sets the window option `@agent_waiting` to `<epoch>|<reason>`, and the globals
+  `@agents_asking` (windows with an ask) and `@agents_waiting` (the rest), for the status bar. An
+  ask is never replaced by a later permission, idle or done mark; a prompt or `SessionEnd` clears it.
+- Banners: asks and permission prompts always; a finished turn only when it ran 2 minutes or more
+  (counted from the prompt), with the first line of the reply. For an iTerm2 client
+  (`#{client_termtype}`) it writes `OSC 1337 ; Custom=id=agent-ping:<base64 {title, subtitle,
+  body}>`, which the dotfiles' iTerm2 script `agent_ping.py` posts as a macOS notification; other
+  terminals get OSC 9 `<title>: <body>`. Every client also gets a 5 s status-line message. Nothing is
+  marked or sent when the pane is the active pane of a window a client is showing.
 - A prompt clears the window's mark (any prompt in the window: one mark per window, newest reason
   wins), as does Claude's `SessionEnd`. A prompt starting with `keepalive:` (the `idle` mod) leaves
   the mark alone, and the `Stop` that follows it is ignored.
@@ -101,6 +107,8 @@ agent-ping/test.sh          # scratch tmux server (-L agent-ping-test); never to
 `~/.claude/settings.json`, merged into the existing `hooks`:
 
 ```json
+"PreToolUse": [{"matcher": "AskUserQuestion",
+  "hooks": [{"type": "command", "command": "\"$HOME/.local/bin/agent-ping\" claude"}]}],
 "Notification": [{"matcher": "permission_prompt|elicitation_dialog|idle_prompt",
   "hooks": [{"type": "command", "command": "\"$HOME/.local/bin/agent-ping\" claude"}]}],
 "Stop": [{"hooks": [{"type": "command", "command": "\"$HOME/.local/bin/agent-ping\" claude"}]}],

@@ -21,11 +21,18 @@ import subprocess
 import sys
 import tempfile
 import termios
+import threading
 import time
 import tty
 
 PAN_STEP = 0.25  # fraction of the view one h/j/k/l moves
 ZOOM_STEP = 1.25
+
+
+def log(msg):
+    if os.environ.get("PDFPANE_DEBUG"):
+        with open(os.environ["PDFPANE_DEBUG"], "a") as f:
+            f.write(f"{time.monotonic():.3f} {msg}\n")
 
 
 def die(msg):
@@ -60,6 +67,8 @@ class Viewer:
         self.x = self.y = 0.0  # top-left of the view, as a fraction of the rendered page
         self.mtime = None
         self.tmp = tempfile.mkdtemp(prefix="pdfpane-")
+        self.cache, self.sizes, self.lock = {}, {}, threading.Lock()
+        self.total = 1
 
     # page facts
     def pages(self):
@@ -69,16 +78,22 @@ class Viewer:
         m = re.search(r"^Pages:\s+(\d+)", out, re.M)
         return int(m.group(1)) if m else 1
 
-    def page_size(self):
+    def page_size(self, page=None):
         """Page size in points (PDF) or pixels (image)."""
+        page = page or self.page
+        if (page, self.mtime) in self.sizes:
+            return self.sizes[page, self.mtime]
         if self.is_pdf:
-            out = subprocess.run(["pdfinfo", "-f", str(self.page), "-l", str(self.page), self.path],
+            out = subprocess.run(["pdfinfo", "-f", str(page), "-l", str(page), self.path],
                                  capture_output=True, text=True).stdout
             m = re.search(r"size:\s+([\d.]+) x ([\d.]+) pts", out)
-            return (float(m.group(1)), float(m.group(2))) if m else (612.0, 792.0)
-        from PIL import Image
-        with Image.open(self.path) as im:
-            return im.size
+            size = (float(m.group(1)), float(m.group(2))) if m else (612.0, 792.0)
+        else:
+            from PIL import Image
+            with Image.open(self.path) as im:
+                size = im.size
+        self.sizes[page, self.mtime] = size
+        return size
 
     def view_px(self):
         """The pane's drawing area in pixels, leaving one row for the status line."""
@@ -91,33 +106,75 @@ class Viewer:
         return cols, rows - 1, cols * cw, (rows - 1) * ch
 
     # drawing
-    def render(self):
+    def geometry(self, page, x, y):
+        """Everything one view depends on: the cache key and the crop to render."""
         cols, rows, vw, vh = self.view_px()
-        pw, ph = self.page_size()
+        pw, ph = self.page_size(page)
         fit = vw / pw if self.fit == "width" else min(vw / pw, vh / ph)
         scale = fit * self.zoom  # output pixels per page unit
         full_w, full_h = pw * scale, ph * scale
-        self.x = min(max(self.x, 0.0), max(0.0, 1 - vw / full_w))
-        self.y = min(max(self.y, 0.0), max(0.0, 1 - vh / full_h))
-        cx, cy = int(self.x * full_w), int(self.y * full_h)
-        cw, ch = int(min(vw, full_w)), int(min(vh, full_h))
-        out = os.path.join(self.tmp, "view")
+        x = min(max(x, 0.0), max(0.0, 1 - vw / full_w))
+        y = min(max(y, 0.0), max(0.0, 1 - vh / full_h))
+        crop = (int(x * full_w), int(y * full_h), int(min(vw, full_w)), int(min(vh, full_h)))
+        key = (page, round(scale, 4), crop, cols, rows, self.mtime)
+        return key, x, y, scale, (full_w, full_h), crop, cols, rows
+
+    def build(self, page, scale, full, crop, cols, rows):
+        """Render one view and return the bytes to write to the terminal."""
+        cx, cy, cw, ch = crop
+        base = os.path.join(self.tmp, f"{page}-{scale:.4f}-{cx}-{cy}-{cw}-{ch}-{threading.get_ident()}")
         if self.is_pdf:
-            subprocess.run(["pdftoppm", "-f", str(self.page), "-l", str(self.page), "-r", f"{72 * scale:.2f}",
+            subprocess.run(["pdftoppm", "-f", str(page), "-l", str(page), "-r", f"{72 * scale:.2f}",
                             "-x", str(cx), "-y", str(cy), "-W", str(cw), "-H", str(ch),
-                            "-png", "-singlefile", self.path, out], check=True, capture_output=True)
+                            "-singlefile", self.path, base], check=True, capture_output=True)
+            image = base + ".ppm"
         else:
             from PIL import Image
+            image = base + ".ppm"
             with Image.open(self.path) as im:
-                im.convert("RGB").resize((int(full_w), int(full_h))).crop(
-                    (cx, cy, cx + cw, cy + ch)).save(out + ".png")
-        sys.stdout.write("\x1b[2J\x1b[H")
-        sys.stdout.flush()
-        subprocess.run(["timg", "-ps", f"-g{cols}x{rows}", out + ".png"], stderr=subprocess.DEVNULL)
+                im.convert("RGB").resize((int(full[0]), int(full[1]))).crop(
+                    (cx, cy, cx + cw, cy + ch)).save(image)
+        try:
+            return subprocess.run(["timg", "-ps", f"-g{cols}x{rows}", image],
+                                  capture_output=True, check=True).stdout
+        finally:
+            os.remove(image)
+
+    def view(self, page, x, y):
+        """The bytes for one view, from the cache or freshly built."""
+        key, x, y, scale, full, crop, cols, rows = self.geometry(page, x, y)
+        with self.lock:
+            hit = self.cache.get(key)
+        if hit is None:
+            hit = self.build(page, scale, full, crop, cols, rows)
+            with self.lock:
+                self.cache[key] = hit
+                while len(self.cache) > 12:
+                    self.cache.pop(next(iter(self.cache)))
+        return hit, x, y, rows, cols
+
+    def prefetch(self):
+        """Build the next and previous pages at the current zoom while the user reads this one."""
+        for page in (self.page + 1, self.page - 1):
+            if 1 <= page <= self.total:
+                try:
+                    self.view(page, self.x, 0.0)
+                except Exception:
+                    pass
+
+    def render(self):
+        t0 = time.monotonic()
+        data, self.x, self.y, rows, cols = self.view(self.page, self.x, self.y)
+        log(f"page {self.page} view {time.monotonic() - t0:.3f}s {len(data)} bytes")
+        out = sys.stdout.buffer
+        out.write(b"\x1b[2J\x1b[H" + data)
         fit = "fit width" if self.fit == "width" else "fit page"
-        status = f"{os.path.basename(self.path)}  {self.page}/{self.total}  {fit} {self.zoom * 100:.0f}%  [n/p +/- 0 w hjkl : <> f q]"
-        sys.stdout.write(f"\x1b[{rows + 1};1H\x1b[2K{status[:cols - 1]}")
-        sys.stdout.flush()
+        status = (f"{os.path.basename(self.path)}  {self.page}/{self.total}  {fit} {self.zoom * 100:.0f}%"
+                  f"  [n/p +/- 0 w hjkl : <> f q]")
+        out.write(f"\x1b[{rows + 1};1H\x1b[2K{status[:cols - 1]}".encode())
+        out.flush()
+        log(f"page {self.page} written {time.monotonic() - t0:.3f}s")
+        threading.Thread(target=self.prefetch, daemon=True).start()
 
     def draw(self):
         try:
@@ -230,6 +287,8 @@ class Viewer:
                     k = self.read_key(1.0)
                 except InterruptedError:
                     continue
+                if k:
+                    log(f"key {k!r}")
                 if k and self.handle(k):
                     redraw[0] = True
         finally:

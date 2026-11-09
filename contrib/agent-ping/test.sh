@@ -112,7 +112,7 @@ t set -p -t "$p2" @agent_turn_start $(($(date +%s) - 200))
 hook "$p2" claude "{$c,\"hook_event_name\":\"Stop\",\"last_assistant_message\":\"\\nAll green.\\nmore\"}"
 check "long turn: OSC 9 banner" "$(grep -c "$(printf '\033]9;Claude done · s:2 · 3m: All green.\007')" "$tmp/client.out")" '[1-9]'
 pl=$(grep -ao 'Custom=id=agent-ping:[A-Za-z0-9+/=]*' "$tmp/iterm.out" | tail -1 | cut -d: -f2 | base64 -d)
-check "long turn: iTerm2 payload" "$(printf '%s' "$pl" | jq -r '[.title, .body] | join("|")')" 'Claude done · s:2 · 3m\|All green\.'
+check "long turn: iTerm2 payload" "$(printf '%s' "$pl" | jq -r '[.title, .body, .group] | join("|")')" 'Claude done · s:2 · 3m\|All green\.\|s:2'
 check "iTerm2 client gets no OSC 9" "$(grep -c "$(printf '\033]9;')" "$tmp/iterm.out")" 0
 
 s=$(date +%s%N); hook "$p1" codex "{$x,\"hook_event_name\":\"Stop\"}"; ms=$((($(date +%s%N) - s) / 1000000))

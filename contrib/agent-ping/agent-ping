@@ -116,7 +116,7 @@ permission) title="$who needs permission · $sess:$win" ;;
 *) title="$who done · $sess:$win · $took" ;;
 esac
 # D44: iTerm2 gets a payload for the agent_ping.py script (title, subtitle, body); others get OSC 9.
-payload=$(jq -nc --arg t "$title" --arg s "$wname" --arg b "$text" '{title: $t, subtitle: $s, body: $b}' | base64 | tr -d '\n')
+payload=$(jq -nc --arg t "$title" --arg s "$wname" --arg b "$text" --arg g "$sess:$win" '{title: $t, subtitle: $s, body: $b, group: $g}' | base64 | tr -d '\n')
 tmux list-clients -F '#{client_tty}	#{client_termtype}' | while IFS="$(printf '\t')" read -r tty term; do
 	case $term in
 	iTerm2*) printf '\033]1337;Custom=id=agent-ping:%s\007' "$payload" >"$tty" ;;

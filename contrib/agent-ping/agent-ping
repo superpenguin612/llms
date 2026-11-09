@@ -91,17 +91,20 @@ UserPromptSubmit:*)
 		tmux set -p -t "$pane" @agent_keepalive 1
 	else
 		tmux set -wu -t "$pane" @agent_waiting
+		tmux set -wu -t "$pane" @agent_text
 		tmux set -p -t "$pane" @agent_turn_start "$now"
 	fi
 	;;
-SessionEnd:*) tmux set -wu -t "$pane" @agent_waiting ;;
+SessionEnd:*) tmux set -wu -t "$pane" @agent_waiting \; set -wu -t "$pane" @agent_text ;;
 esac
 
 # I'm already looking at this pane: no mark, no banner.
 [ "$shown" = 1 ] && why=
 [ -n "$why" ] || banner=
 # D43: an open ask outranks every other mark; only a prompt or SessionEnd clears it.
-[ -n "$why" ] && { [ "$why" = ask ] || [ -z "$asking" ]; } && tmux set -w -t "$pane" @agent_waiting "$now|$why"
+# D63: the text goes with the mark, for Raycast's Waiting Agents.
+[ -n "$why" ] && { [ "$why" = ask ] || [ -z "$asking" ]; } &&
+	tmux set -w -t "$pane" @agent_waiting "$now|$why" \; set -w -t "$pane" @agent_text "$text"
 [ -n "$asking" ] && [ "$why" = permission ] && banner=
 
 marks=$(tmux list-windows -a -F '#{@agent_waiting}')

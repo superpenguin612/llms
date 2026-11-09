@@ -56,9 +56,13 @@ hook "$p0" claude "{$c,\"hook_event_name\":\"Stop\",\"stop_hook_active\":false}"
 check "stop keeps an ask" "$(w "$p0")" '[0-9]+\|ask'
 hook "$p0" claude "{$c,\"hook_event_name\":\"UserPromptSubmit\",\"prompt\":\"answer\"}"
 check "prompt clears an ask" "$(w "$p0")" ''
+check "prompt clears the text" "$(t show -wqv -t "$p0" @agent_text)" ''
 check "prompt starts the turn" "$(t show -pqv -t "$p0" @agent_turn_start)" '[0-9]{5,}'
 hook "$p0" claude "{$c,\"hook_event_name\":\"PreToolUse\",\"tool_name\":\"AskUserQuestion\",\"tool_input\":{\"questions\":[{\"question\":\"Q1?\"},{\"question\":\"Q2?\"}]}}"
 check "dialog is an ask" "$(w "$p0")" '[0-9]+\|ask'
+check "dialog text kept" "$(t show -wqv -t "$p0" @agent_text)" 'Q1\? \(\+1 more\)'
+hook "$p0" claude "{$c,\"hook_event_name\":\"Notification\",\"notification_type\":\"permission_prompt\",\"message\":\"perm\"}"
+check "permission keeps the ask text" "$(t show -wqv -t "$p0" @agent_text)" 'Q1\? \(\+1 more\)'
 hook "$p0" claude "{$c,\"hook_event_name\":\"UserPromptSubmit\",\"prompt\":\"a\"}"
 hook "$p0" claude "{$c,\"hook_event_name\":\"Notification\",\"notification_type\":\"idle_prompt\",\"message\":\"m\"}"
 check "idle marks" "$(w "$p0")" '[0-9]+\|idle'
@@ -84,6 +88,7 @@ hook "$p1" codex "{$x,\"hook_event_name\":\"Stop\",\"permission_mode\":\"default
 check "codex stop marks done" "$(w "$p1")" '[0-9]+\|done'
 hook "$p0" claude "{$c,\"hook_event_name\":\"SessionEnd\",\"reason\":\"other\"}"
 check "session end clears" "$(w "$p0")" ''
+check "session end clears the text" "$(t show -wqv -t "$p0" @agent_text)" ''
 check "count 1 after end" "$(n)" 1
 
 hook "$p2" claude '{"session_id":"id-quit","hook_event_name":"Stop"}'

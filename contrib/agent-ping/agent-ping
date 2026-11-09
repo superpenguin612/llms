@@ -43,7 +43,9 @@ if [ "$sid" != - ]; then
 	{
 		[ -f "$map" ] && awk -F '\t' -v s="$sess" -v w="$win" -v p="$pidx" '!($1==s && $2==w && $3==p)' "$map"
 		# Quitting Claude on purpose drops the row; a kill or reboot (reason "other") keeps it.
-		case $event:$reason in SessionEnd:prompt_input_exit|SessionEnd:logout) ;; *)
+		# shortcut: Codex always sends reason "other", so any Codex SessionEnd drops the row; if Codex
+		# runs it while the VM shuts down, that session won't resume. Revisit if Codex adds reasons.
+		case $agent:$event:$reason in *:SessionEnd:prompt_input_exit|*:SessionEnd:logout|codex:SessionEnd:*) ;; *)
 			printf '%s\t%s\t%s\t%s\t%s\n' "$sess" "$win" "$pidx" "$agent" "$sid" ;;
 		esac
 	} >"$map.$$" && mv "$map.$$" "$map"

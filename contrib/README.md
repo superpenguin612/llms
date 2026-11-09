@@ -113,8 +113,9 @@ agent-ping/test.sh          # scratch tmux server (-L agent-ping-test); never to
 ```json
 "PermissionRequest": [{"hooks": [{"type": "command", "command": "\"$HOME/.local/bin/agent-ping\" codex", "timeout": 5}]}],
 "Stop": [{"hooks": [{"type": "command", "command": "\"$HOME/.local/bin/agent-ping\" codex", "timeout": 5}]}],
-"UserPromptSubmit": [{"hooks": [{"type": "command", "command": "\"$HOME/.local/bin/agent-ping\" codex", "timeout": 5}]}]
+"UserPromptSubmit": [{"hooks": [{"type": "command", "command": "\"$HOME/.local/bin/agent-ping\" codex", "timeout": 5}]}],
+"SessionEnd": [{"hooks": [{"type": "command", "command": "\"$HOME/.local/bin/agent-ping\" codex", "timeout": 5}]}]
 ```
 
-Codex has no `SessionEnd` wired, so a Codex pane's row stays after Codex quits; a restore then
-resumes it if the pane is back at a shell.
+Codex's `SessionEnd` always says reason `other`, so any Codex quit drops its row; a Codex session
+that Codex itself ends during a shutdown won't be resumed.

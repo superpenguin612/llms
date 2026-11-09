@@ -97,4 +97,6 @@ sleep 0.5
 check "restore resumes claude" "$(t capture-pane -p -t s:0.0 | grep -c 'STUB claude --resume id-claude')" '[1-9]'
 check "restore resumes codex" "$(t capture-pane -p -t s:1.0 | grep -c 'STUB codex resume id-codex')" '[1-9]'
 check "restore skips busy pane" "$(t display -p -t s:3.0 '#{pane_current_command}')" sleep
+hook "$p1" codex "{$x,\"hook_event_name\":\"SessionEnd\",\"reason\":\"other\"}"
+check "codex quit drops row" "$(grep -c id-codex "$map")" 0
 exit $fail

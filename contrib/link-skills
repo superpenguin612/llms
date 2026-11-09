@@ -6,7 +6,7 @@ here=$(cd "$(dirname "$0")/.." && pwd)
 link() { mkdir -p "$1"; ln -sfn "$2" "$1/$(basename "$2")"; }
 matt="$here/vendor/mattpocock-skills/skills"
 skills="$here/skills/knowledge-base $here/skills/design-walkthrough
-  $here/vendor/humanizer $matt/productivity/grilling $matt/engineering/tdd $matt/engineering/diagnosing-bugs"
+  $here/vendor/humanizer $here/skills/grilling $matt/engineering/tdd $matt/engineering/diagnosing-bugs"
 
 for s in $skills; do link "$HOME/.codex/skills" "$s"; link "$HOME/.claude/skills" "$s"; done
 for s in "$here"/vendor/ponytail/skills/*; do

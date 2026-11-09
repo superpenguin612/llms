@@ -78,9 +78,9 @@ Third-party skills are pinned as git submodules in `vendor/` (updates only when 
 |---|---|
 | `vendor/ponytail` | smallest-complete-change coding style, plus review/audit/debt skills |
 | `vendor/humanizer` | remove AI-writing patterns from prose |
-| `vendor/mattpocock-skills` | mattpocock/skills; `grilling` (hard design-tree interviews), `tdd` and `diagnosing-bugs` are linked |
+| `vendor/mattpocock-skills` | mattpocock/skills; `tdd` and `diagnosing-bugs` are linked. `skills/grilling` (hard design-tree interviews) is our copy of its `grilling`, changed to ask through a question dialog when the tool has one |
 
-`git submodule update --init`, then `contrib/link-skills` links them (and this repo's `knowledge-base` and `design-walkthrough`) into `~/.codex/skills` and `~/.claude/skills`.
+`git submodule update --init`, then `contrib/link-skills` links them (and this repo's `knowledge-base`, `design-walkthrough` and `grilling`) into `~/.codex/skills` and `~/.claude/skills`.
 
 `contrib/claude/agents` holds Claude Code agent types; link it as `~/.claude/agents`. `long-runner` is a general-purpose agent with a 1-hour prompt cache, for subagents that wait on commands over 5 minutes.
 

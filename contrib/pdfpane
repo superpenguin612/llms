@@ -3,10 +3,10 @@
 
 Running it again reuses the pane. The pane redraws when the file changes or the pane is resized.
 Keys in the pane:
-  n space ]   next page          p [     previous page     g G   first, last page
+  n space ] → next page      p [ ←   previous page     g G   first, last page
   :           go to page         + =     zoom in            -     zoom out
   0           fit page           w       fit width
-  h j k l     pan (or arrows)    H J K L pan a full screen
+  h j k l     pan (↑ ↓ too)      H J K L pan a full screen
   < >         widen, narrow pane f       full screen on/off
   r           redraw             q       close
 """
@@ -199,7 +199,7 @@ class Viewer:
         key = os.read(sys.stdin.fileno(), 1).decode(errors="ignore")
         if key == "\x1b" and select.select([sys.stdin], [], [], 0.02)[0]:
             seq = os.read(sys.stdin.fileno(), 8).decode(errors="ignore")
-            return {"[A": "k", "[B": "j", "[C": "l", "[D": "h", "[5~": "p", "[6~": "n"}.get(seq)
+            return {"[A": "k", "[B": "j", "[C": "n", "[D": "p", "[5~": "p", "[6~": "n"}.get(seq)
         return key
 
     def goto_prompt(self):

@@ -1,70 +1,244 @@
-#!/usr/bin/env bash
-# pdfpane FILE [PAGE]: show a PDF page (or an image) in a tmux side pane, drawn with timg as sixel.
-# Running it again reuses the pane. The pane redraws when the file changes or the pane is resized.
-# Keys in the pane: j/n/space next page, k/p previous, g first, G last, r redraw, q close.
-set -euo pipefail
+#!/usr/bin/env python3
+"""pdfpane FILE [PAGE]: show a PDF page or an image in a tmux side pane, drawn by timg as sixel.
 
-die() { echo "pdfpane: $*" >&2; exit 1; }
+Running it again reuses the pane. The pane redraws when the file changes or the pane is resized.
+Keys in the pane:
+  n space ]   next page          p [     previous page     g G   first, last page
+  :           go to page         + =     zoom in            -     zoom out
+  0           fit page           w       fit width
+  h j k l     pan (or arrows)    H J K L pan a full screen
+  r           redraw             q       close
+"""
 
-page_count() {
-  if [[ $1 == *.pdf ]]; then pdfinfo "$1" 2>/dev/null | awk '/^Pages:/ {print $2}'; else echo 1; fi
-}
+import os
+import re
+import select
+import shutil
+import shlex
+import signal
+import subprocess
+import sys
+import tempfile
+import termios
+import time
+import tty
 
-view() {
-  local file=$1 page=$2 last="" redraw=0 pages key
-  trap 'redraw=1' WINCH
-  while :; do
-    local mtime
-    mtime=$(stat -c %Y "$file" 2>/dev/null || echo missing)
-    if [[ $mtime != "$last" ]]; then
-      sleep 0.5  # let a build finish writing before reading it
-      mtime=$(stat -c %Y "$file" 2>/dev/null || echo missing)
-      redraw=1
-    fi
-    if (( redraw )); then
-      redraw=0 last=$mtime
-      pages=$(page_count "$file"); pages=${pages:-1}
-      (( page > pages )) && page=$pages
-      (( page < 1 )) && page=1
-      clear
-      if [[ $mtime == missing ]]; then
-        echo "waiting for $file"
-      else
-        local frames=()
-        [[ $file == *.pdf ]] && frames=(--frame-offset=$((page - 1)) --frames=1)
-        timg -ps -g "$(tput cols)x$(( $(tput lines) - 1 ))" "${frames[@]}" "$file" 2>/dev/null || echo "cannot draw $file"
-        printf '%s  page %d/%d  [j/k g/G r q]' "$(basename "$file")" "$page" "$pages"
-      fi
-    fi
-    if read -rsn1 -t 1 key; then
-      case $key in
-        j|n|' ') (( page < pages )) && { page=$((page + 1)); redraw=1; } ;;
-        k|p) (( page > 1 )) && { page=$((page - 1)); redraw=1; } ;;
-        g) page=1 redraw=1 ;;
-        G) page=$pages redraw=1 ;;
-        r) redraw=1 ;;
-        q) exit 0 ;;
-      esac
-    fi
-  done
-}
+PAN_STEP = 0.25  # fraction of the view one h/j/k/l moves
+ZOOM_STEP = 1.25
 
-if [[ ${1:-} == --view ]]; then view "$2" "$3"; exit; fi
 
-[[ $# -ge 1 && $# -le 2 ]] || die "usage: pdfpane FILE [PAGE]"
-[[ -n ${TMUX:-} ]] || die "not inside tmux"
-file=$(realpath "$1")
-page=${2:-1}
-[[ $page =~ ^[0-9]+$ ]] || die "PAGE must be a number"
-self=$(realpath "$0")
-here=${TMUX_PANE:-$(tmux display -p '#{pane_id}')}
-cmd=$(printf '%q --view %q %q' "$self" "$file" "$page")
+def die(msg):
+    print(f"pdfpane: {msg}", file=sys.stderr)
+    sys.exit(1)
 
-pane=$(tmux list-panes -t "$here" -F '#{pane_id} #{@pdfpane}' | awk '$2 == 1 {print $1; exit}')
-if [[ -n $pane ]]; then
-  tmux respawn-pane -k -t "$pane" "$cmd"
-else
-  pane=$(tmux split-window -h -d -l 45% -t "$here" -P -F '#{pane_id}' "$cmd")
-  tmux set -p -t "$pane" @pdfpane 1
-fi
-echo "pdfpane: $file page $page in pane $pane"
+
+def tmux(*args):
+    return subprocess.run(["tmux", *args], capture_output=True, text=True, check=True).stdout.strip()
+
+
+def launch(path, page):
+    if not os.environ.get("TMUX"):
+        die("not inside tmux")
+    here = os.environ.get("TMUX_PANE") or tmux("display", "-p", "#{pane_id}")
+    cmd = shlex.join([os.path.realpath(sys.argv[0]), "--view", path, str(page)])
+    panes = tmux("list-panes", "-t", here, "-F", "#{pane_id} #{@pdfpane}").splitlines()
+    pane = next((p.split()[0] for p in panes if p.endswith(" 1")), None)
+    if pane:
+        tmux("respawn-pane", "-k", "-t", pane, cmd)
+    else:
+        pane = tmux("split-window", "-h", "-d", "-l", "45%", "-t", here, "-P", "-F", "#{pane_id}", cmd)
+        tmux("set", "-p", "-t", pane, "@pdfpane", "1")
+    print(f"pdfpane: {path} page {page} in pane {pane}")
+
+
+class Viewer:
+    def __init__(self, path, page):
+        self.path, self.page = path, page
+        self.is_pdf = path.lower().endswith(".pdf")
+        self.zoom, self.fit = 1.0, "page"  # zoom is relative to the fit
+        self.x = self.y = 0.0  # top-left of the view, as a fraction of the rendered page
+        self.mtime = None
+        self.tmp = tempfile.mkdtemp(prefix="pdfpane-")
+
+    # page facts
+    def pages(self):
+        if not self.is_pdf:
+            return 1
+        out = subprocess.run(["pdfinfo", self.path], capture_output=True, text=True).stdout
+        m = re.search(r"^Pages:\s+(\d+)", out, re.M)
+        return int(m.group(1)) if m else 1
+
+    def page_size(self):
+        """Page size in points (PDF) or pixels (image)."""
+        if self.is_pdf:
+            out = subprocess.run(["pdfinfo", "-f", str(self.page), "-l", str(self.page), self.path],
+                                 capture_output=True, text=True).stdout
+            m = re.search(r"size:\s+([\d.]+) x ([\d.]+) pts", out)
+            return (float(m.group(1)), float(m.group(2))) if m else (612.0, 792.0)
+        from PIL import Image
+        with Image.open(self.path) as im:
+            return im.size
+
+    def view_px(self):
+        """The pane's drawing area in pixels, leaving one row for the status line."""
+        cols, rows = os.get_terminal_size()
+        try:
+            cw, ch = (int(v) for v in tmux("display", "-p", "-t", os.environ["TMUX_PANE"],
+                                            "#{client_cell_width} #{client_cell_height}").split())
+        except Exception:
+            cw, ch = 8, 16
+        return cols, rows - 1, cols * cw, (rows - 1) * ch
+
+    # drawing
+    def render(self):
+        cols, rows, vw, vh = self.view_px()
+        pw, ph = self.page_size()
+        fit = vw / pw if self.fit == "width" else min(vw / pw, vh / ph)
+        scale = fit * self.zoom  # output pixels per page unit
+        full_w, full_h = pw * scale, ph * scale
+        self.x = min(max(self.x, 0.0), max(0.0, 1 - vw / full_w))
+        self.y = min(max(self.y, 0.0), max(0.0, 1 - vh / full_h))
+        cx, cy = int(self.x * full_w), int(self.y * full_h)
+        cw, ch = int(min(vw, full_w)), int(min(vh, full_h))
+        out = os.path.join(self.tmp, "view")
+        if self.is_pdf:
+            subprocess.run(["pdftoppm", "-f", str(self.page), "-l", str(self.page), "-r", f"{72 * scale:.2f}",
+                            "-x", str(cx), "-y", str(cy), "-W", str(cw), "-H", str(ch),
+                            "-png", "-singlefile", self.path, out], check=True, capture_output=True)
+        else:
+            from PIL import Image
+            with Image.open(self.path) as im:
+                im.convert("RGB").resize((int(full_w), int(full_h))).crop(
+                    (cx, cy, cx + cw, cy + ch)).save(out + ".png")
+        sys.stdout.write("\x1b[2J\x1b[H")
+        sys.stdout.flush()
+        subprocess.run(["timg", "-ps", f"-g{cols}x{rows}", out + ".png"], stderr=subprocess.DEVNULL)
+        fit = "fit width" if self.fit == "width" else "fit page"
+        status = f"{os.path.basename(self.path)}  {self.page}/{self.total}  {fit} {self.zoom * 100:.0f}%  [n/p +/- 0 w hjkl : q]"
+        sys.stdout.write(f"\x1b[{rows + 1};1H\x1b[2K{status[:cols - 1]}")
+        sys.stdout.flush()
+
+    def draw(self):
+        try:
+            self.mtime = os.stat(self.path).st_mtime
+        except FileNotFoundError:
+            self.mtime = None
+            sys.stdout.write(f"\x1b[2J\x1b[Hwaiting for {self.path}")
+            sys.stdout.flush()
+            return
+        self.total = self.pages()
+        self.page = min(max(self.page, 1), self.total)
+        try:
+            self.render()
+        except Exception as exc:
+            sys.stdout.write(f"\x1b[2J\x1b[Hcannot draw {self.path}: {exc}")
+            sys.stdout.flush()
+
+    # input
+    def read_key(self, timeout):
+        if not select.select([sys.stdin], [], [], timeout)[0]:
+            return None
+        key = os.read(sys.stdin.fileno(), 1).decode(errors="ignore")
+        if key == "\x1b" and select.select([sys.stdin], [], [], 0.02)[0]:
+            seq = os.read(sys.stdin.fileno(), 8).decode(errors="ignore")
+            return {"[A": "k", "[B": "j", "[C": "l", "[D": "h", "[5~": "p", "[6~": "n"}.get(seq)
+        return key
+
+    def goto_prompt(self):
+        cols, rows, _, _ = self.view_px()
+        sys.stdout.write(f"\x1b[{rows + 1};1H\x1b[2Kpage: ")
+        sys.stdout.flush()
+        digits = ""
+        while (k := self.read_key(None)) not in ("\r", "\n", "\x1b", None):
+            if k.isdigit():
+                digits += k
+                sys.stdout.write(k)
+                sys.stdout.flush()
+            elif k == "\x7f" and digits:
+                digits = digits[:-1]
+                sys.stdout.write("\b \b")
+                sys.stdout.flush()
+        if digits:
+            self.page, self.x, self.y = int(digits), 0.0, 0.0
+
+    def handle(self, k):
+        _, _, vw, vh = self.view_px()
+        if k in ("n", " ", "]"):
+            if self.page < self.total:
+                self.page, self.y = self.page + 1, 0.0
+        elif k in ("p", "["):
+            if self.page > 1:
+                self.page, self.y = self.page - 1, 0.0
+        elif k == "g":
+            self.page, self.y = 1, 0.0
+        elif k == "G":
+            self.page, self.y = self.total, 0.0
+        elif k == ":":
+            self.goto_prompt()
+        elif k in ("+", "="):
+            self.zoom *= ZOOM_STEP
+        elif k == "-":
+            self.zoom = max(0.2, self.zoom / ZOOM_STEP)
+        elif k == "0":
+            self.fit, self.zoom, self.x, self.y = "page", 1.0, 0.0, 0.0
+        elif k == "w":
+            self.fit, self.zoom, self.x = "width", 1.0, 0.0
+        elif k in "hjklHJKL" and len(k) == 1:
+            step = 1.0 if k.isupper() else PAN_STEP
+            # one step is a fraction of the view, expressed as a fraction of the page
+            pw, ph = self.page_size()
+            fit = vw / pw if self.fit == "width" else min(vw / pw, vh / ph)
+            fw, fh = pw * fit * self.zoom, ph * fit * self.zoom
+            dx, dy = step * vw / fw, step * vh / fh
+            self.x += {"h": -dx, "l": dx}.get(k.lower(), 0)
+            self.y += {"k": -dy, "j": dy}.get(k.lower(), 0)
+        elif k == "q":
+            sys.exit(0)
+        elif k != "r":
+            return False
+        return True
+
+    def run(self):
+        redraw = [True]
+        signal.signal(signal.SIGWINCH, lambda *_: redraw.__setitem__(0, True))
+        old = termios.tcgetattr(sys.stdin)
+        tty.setcbreak(sys.stdin)
+        sys.stdout.write("\x1b[?25l")  # hide the cursor
+        try:
+            while True:
+                try:
+                    mtime = os.stat(self.path).st_mtime
+                except FileNotFoundError:
+                    mtime = None
+                if mtime != self.mtime:
+                    time.sleep(0.5)  # let a build finish writing before reading it
+                    redraw[0] = True
+                if redraw[0]:
+                    redraw[0] = False
+                    self.draw()
+                try:
+                    k = self.read_key(1.0)
+                except InterruptedError:
+                    continue
+                if k and self.handle(k):
+                    redraw[0] = True
+        finally:
+            termios.tcsetattr(sys.stdin, termios.TCSADRAIN, old)
+            sys.stdout.write("\x1b[?25h")
+            shutil.rmtree(self.tmp, ignore_errors=True)
+
+
+def main():
+    args = sys.argv[1:]
+    if args[:1] == ["--view"]:
+        Viewer(args[1], int(args[2])).run()
+        return
+    if not 1 <= len(args) <= 2:
+        die("usage: pdfpane FILE [PAGE]")
+    if len(args) == 2 and not args[1].isdigit():
+        die("PAGE must be a number")
+    launch(os.path.realpath(args[0]), int(args[1]) if len(args) == 2 else 1)
+
+
+if __name__ == "__main__":
+    main()

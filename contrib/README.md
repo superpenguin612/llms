@@ -63,5 +63,10 @@ changes, so it follows rebuilds. Needs `timg` and `pdfinfo` (`apt install timg p
 
 ```sh
 ln -sf "$PWD/pdfpane" ~/.local/bin/pdfpane
-pdfpane build/report.pdf 3        # page 3; keys in the pane: j/k next/previous, g/G first/last, r, q
+pdfpane build/report.pdf 3        # opens page 3 beside the current pane
 ```
+
+Keys in the pane: `n`/space/PgDn and `p`/PgUp for next and previous page, `g`/`G` first and last,
+`:` then a number to jump, `+`/`-` zoom, `0` fit page, `w` fit width, `h j k l` or the arrows to
+pan (capitals pan a whole screen), `r` redraw, `q` close. Zoomed views are re-rendered from the PDF
+at the new resolution (`pdftoppm` with a crop), so text stays sharp. Images need Pillow.

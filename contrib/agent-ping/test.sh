@@ -5,6 +5,8 @@ ap="$here/agent-ping"
 L=agent-ping-test
 tmp=$(mktemp -d)
 export HOME="$tmp" XDG_STATE_HOME="$tmp/state"
+# mise shims under a fake HOME look versions up online on every call; use system tools.
+PATH=$(printf %s "$PATH" | tr : '\n' | grep -v /mise/shims | paste -sd: -)
 map="$tmp/state/agent-ping/panes.tsv"
 unset TMUX TMUX_PANE
 t() { tmux -L "$L" "$@"; }

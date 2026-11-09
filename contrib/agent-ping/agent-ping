@@ -124,4 +124,9 @@ tmux list-clients -F '#{client_tty}	#{client_termtype}' | while IFS="$(printf '\
 	esac
 	tmux display -c "$tty" -d 5000 -l "$([ "$why" = ask ] && echo '?' || echo '●') $title${text:+ — $text}"
 done
+# D52: while the flash shows, a click on the status line goes to this window. A later flash
+# takes over; only the flash that set the option clears it.
+tmux set -g @agent_flash_win "$(tmux display -p -t "$pane" '#{window_id}')"
+tmux set -g @agent_flash_by "$$"
+(sleep 5; [ "$(tmux show -gqv @agent_flash_by)" = "$$" ] && tmux set -gu @agent_flash_win) </dev/null >/dev/null 2>&1 &
 exit 0

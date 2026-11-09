@@ -114,6 +114,9 @@ check "long turn: OSC 9 banner" "$(grep -c "$(printf '\033]9;Claude done · s:2 
 pl=$(grep -ao 'Custom=id=agent-ping:[A-Za-z0-9+/=]*' "$tmp/iterm.out" | tail -1 | cut -d: -f2 | base64 -d)
 check "long turn: iTerm2 payload" "$(printf '%s' "$pl" | jq -r '[.title, .body, .group] | join("|")')" 'Claude done · s:2 · 3m\|All green\.\|s:2'
 check "iTerm2 client gets no OSC 9" "$(grep -c "$(printf '\033]9;')" "$tmp/iterm.out")" 0
+check "flash window set" "$(t show -gqv @agent_flash_win)" "$(t display -p -t "$p2" '#{window_id}')"
+sleep 5.3
+check "flash window clears after 5 s" "$(t show -gqv @agent_flash_win)" ''
 
 s=$(date +%s%N); hook "$p1" codex "{$x,\"hook_event_name\":\"Stop\"}"; ms=$((($(date +%s%N) - s) / 1000000))
 check "hook under 100 ms (${ms} ms)" "$([ $ms -lt 100 ] && echo y)" y

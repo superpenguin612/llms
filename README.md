@@ -35,13 +35,12 @@ So each domain gets its own vocabulary, and the same tooling enforces the same r
 Requires Python ≥ 3.11 and `pyyaml`. Capture extras: `trafilatura`, `pymupdf`, `markitdown`. Optional system tools: `tesseract` (OCR), `git`, `yt-dlp`.
 
 ```sh
-python3 -m venv ~/.venvs/kb
-~/.venvs/kb/bin/pip install "kb[capture] @ git+https://github.com/superpenguin612/llms"
-ln -s ~/.venvs/kb/bin/kb ~/.local/bin/kb
+uv tool install "kb[capture] @ git+https://github.com/superpenguin612/llms"
 kb doctor
 ```
 
-To work on it from a checkout: `PYTHONPATH=/path/to/llms python3 -m kb …`.
+To work on it from a checkout: `uv tool install -e "/path/to/llms[capture]"` (edits take effect
+without reinstalling).
 
 ## Quick start
 

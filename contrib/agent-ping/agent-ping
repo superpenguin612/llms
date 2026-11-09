@@ -1,0 +1,86 @@
+#!/bin/sh
+# agent-ping claude|codex   hook mode: hook JSON on stdin; marks the tmux window when the agent waits on me
+# agent-ping restore        after a resurrect restore: resume each recorded agent in its pane
+# Hook mode is silent on stdout (hooks may read it as context) and always exits 0.
+map="${XDG_STATE_HOME:-$HOME/.local/state}/agent-ping/panes.tsv"
+
+if [ "$1" = restore ]; then
+	[ -f "$map" ] || exit 0
+	while IFS="$(printf '\t')" read -r s w p agent id; do
+		t="=$s:$w.$p"
+		case $(tmux display -p -t "$t" '#{pane_current_command}' 2>/dev/null) in
+		sh|bash|zsh|dash|fish) ;;
+		*) continue ;;
+		esac
+		case $agent in
+		claude) tmux send-keys -t "$t" "claude --resume $id" Enter ;;
+		codex) tmux send-keys -t "$t" "codex resume $id" Enter ;;
+		esac
+	done <"$map"
+	exit 0
+fi
+
+[ -n "$TMUX_PANE" ] || exit 0
+exec >/dev/null 2>&1
+agent=$1
+pane=$TMUX_PANE
+
+# One jq call; the prompt itself never leaves jq (it may hold tabs and newlines).
+IFS="$(printf '\t')" read -r event ntype sid keepalive reason <<EOF
+$(jq -r '[.hook_event_name, (.notification_type // "-"), (.session_id // "-"),
+  ((.prompt // "") | startswith("keepalive:")), (.reason // "-")] | @tsv')
+EOF
+
+IFS="$(printf '\t')" read -r sess win pidx shown <<EOF
+$(tmux display -p -t "$pane" '#{session_name}	#{window_index}	#{pane_index}	#{&&:#{pane_active},#{&&:#{window_active},#{session_attached}}}')
+EOF
+
+# D38: remember which conversation runs in this pane, for agent-ping restore.
+if [ "$sid" != - ]; then
+	tmux set -p -t "$pane" @agent_session "$agent:$sid"
+	mkdir -p "${map%/*}"
+	# shortcut: two hooks writing at the same instant can lose one row; the next event rewrites it.
+	{
+		[ -f "$map" ] && awk -F '\t' -v s="$sess" -v w="$win" -v p="$pidx" '!($1==s && $2==w && $3==p)' "$map"
+		# Quitting Claude on purpose drops the row; a kill or reboot (reason "other") keeps it.
+		case $event:$reason in SessionEnd:prompt_input_exit|SessionEnd:logout) ;; *)
+			printf '%s\t%s\t%s\t%s\t%s\n' "$sess" "$win" "$pidx" "$agent" "$sid" ;;
+		esac
+	} >"$map.$$" && mv "$map.$$" "$map"
+fi
+
+why=
+case $event:$ntype in
+Notification:permission_prompt | PermissionRequest:*) why=permission ;;
+Notification:elicitation_dialog | Notification:idle_prompt) why=question ;;
+Stop:*)
+	if [ -n "$(tmux show -pqv -t "$pane" @agent_keepalive)" ]; then
+		tmux set -pu -t "$pane" @agent_keepalive
+	else
+		why=done
+	fi
+	;;
+UserPromptSubmit:*)
+	# A keepalive turn must not clear a real mark, nor leave one behind when it stops.
+	if [ "$keepalive" = true ]; then
+		tmux set -p -t "$pane" @agent_keepalive 1
+	else
+		tmux set -wu -t "$pane" @agent_waiting
+	fi
+	;;
+SessionEnd:*) tmux set -wu -t "$pane" @agent_waiting ;;
+esac
+
+# I'm already looking at this pane: no mark, no banner.
+[ -n "$why" ] && [ "$shown" = 1 ] && why=
+[ -n "$why" ] && tmux set -w -t "$pane" @agent_waiting "$(date +%s)|$why"
+
+tmux set -g @agents_waiting "$(tmux list-windows -a -F '#{@agent_waiting}' | grep -c .)"
+
+if [ -n "$why" ]; then
+	# OSC 9 straight to each client's terminal (bypasses tmux); iTerm2 shows it as a banner.
+	tmux list-clients -F '#{client_tty}' | while read -r tty; do
+		printf '\033]9;%s:%s %s\007' "$sess" "$win" "$why" >"$tty"
+	done
+fi
+exit 0

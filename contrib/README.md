@@ -71,3 +71,50 @@ Keys in the pane: `n`/space/→/PgDn and `p`/←/PgUp for next and previous page
 pan (capitals pan a whole screen), `<`/`>` widen or narrow the pane, `f` full screen on and off,
 `r` redraw, `q` close. Zoomed views are re-rendered from the PDF
 at the new resolution (`pdftoppm` with a crop), so text stays sharp. Images need Pillow.
+
+## agent-ping
+
+Marks the tmux window where Claude Code or Codex is waiting on me (a permission prompt, a question,
+a finished turn), keeps a count of waiting windows, and sends a banner to my Mac. POSIX sh + jq;
+always exits 0, prints nothing, takes ~30 ms, and does nothing outside tmux.
+
+- Sets the window option `@agent_waiting` to `<epoch>|<reason>` (`permission`, `question`,
+  `done`) and the global `@agents_waiting` to the number of marked windows, for the status bar.
+- Writes OSC 9 (`<session>:<window> <reason>`) to each attached client's tty; iTerm2 shows it as
+  a Notification Center banner. Nothing is marked or sent when the pane is the active pane of a
+  window a client is showing.
+- A prompt clears the window's mark (any prompt in the window: one mark per window, newest reason
+  wins), as does Claude's `SessionEnd`. A prompt starting with `keepalive:` (the `idle` mod) leaves
+  the mark alone, and the `Stop` that follows it is ignored.
+- Records `<agent>:<session_id>` on the pane (`@agent_session`) and in
+  `~/.local/state/agent-ping/panes.tsv` (session, window, pane, agent, id; one row per pane).
+  Quitting Claude (`/exit`, logout) drops the row; a kill or reboot keeps it. After a tmux-resurrect
+  restore, `agent-ping restore` types `claude --resume <id>` or `codex resume <id>` into each
+  recorded pane that is running a bare shell. The dotfiles run it from
+  `@resurrect-hook-post-restore-all`.
+
+```sh
+ln -sf "$PWD/agent-ping/agent-ping" ~/.local/bin/agent-ping
+agent-ping/test.sh          # scratch tmux server (-L agent-ping-test); never touches yours
+```
+
+`~/.claude/settings.json`, merged into the existing `hooks`:
+
+```json
+"Notification": [{"matcher": "permission_prompt|elicitation_dialog|idle_prompt",
+  "hooks": [{"type": "command", "command": "\"$HOME/.local/bin/agent-ping\" claude"}]}],
+"Stop": [{"hooks": [{"type": "command", "command": "\"$HOME/.local/bin/agent-ping\" claude"}]}],
+"UserPromptSubmit": [{"hooks": [{"type": "command", "command": "\"$HOME/.local/bin/agent-ping\" claude"}]}],
+"SessionEnd": [{"hooks": [{"type": "command", "command": "\"$HOME/.local/bin/agent-ping\" claude"}]}]
+```
+
+`~/.codex/hooks.json`, merged into the existing `hooks` (Codex asks once to trust new hooks):
+
+```json
+"PermissionRequest": [{"hooks": [{"type": "command", "command": "\"$HOME/.local/bin/agent-ping\" codex", "timeout": 5}]}],
+"Stop": [{"hooks": [{"type": "command", "command": "\"$HOME/.local/bin/agent-ping\" codex", "timeout": 5}]}],
+"UserPromptSubmit": [{"hooks": [{"type": "command", "command": "\"$HOME/.local/bin/agent-ping\" codex", "timeout": 5}]}]
+```
+
+Codex has no `SessionEnd` wired, so a Codex pane's row stays after Codex quits; a restore then
+resumes it if the pane is back at a shell.

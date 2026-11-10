@@ -1,4 +1,8 @@
-#!/usr/bin/env python3
+#!/usr/bin/env -S uv run --quiet --script
+# /// script
+# requires-python = ">=3.11"
+# dependencies = ["pillow"]
+# ///
 """pdfpane FILE [PAGE]: show a PDF page or an image in a tmux side pane, drawn by timg as sixel.
 
 Running it again reuses the pane. The pane redraws when the file changes or the pane is resized.

@@ -192,11 +192,11 @@ test('a fell-back band row shows what the worker is doing, not the fallback agai
   await ui.unmount()
 })
 
-test('seven runs leave five rows and a more line', async ($, on) => {
+test('twelve runs leave ten rows and a more line', async ($, on) => {
   records = {
     'live-a': rec('live-a', LIVE, { status: 'running' }),
     ...Object.fromEntries(
-      Array.from({ length: 5 }, (_, i) => {
+      Array.from({ length: 10 }, (_, i) => {
         const task = `many-${i}`
         return [task, finished(task, `2026-11-04T11:${String(30 + i).padStart(2, '0')}:00-0500`, `${task} wrapped up.`)]
       }),
@@ -214,6 +214,11 @@ test('seven runs leave five rows and a more line', async ($, on) => {
   expect((await ui.findAll({ type: 'Button' })).map(b => b.key)).toEqual([
     'band-live-b',
     'band-live-a',
+    'band-many-9',
+    'band-many-8',
+    'band-many-7',
+    'band-many-6',
+    'band-many-5',
     'band-many-4',
     'band-many-3',
     'band-many-2',

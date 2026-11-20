@@ -4,7 +4,7 @@ import { register as registerPane } from './register'
 import { bandOrder, duration, look, pending, rowLine, shortModel, widths } from './delegate'
 import { PANE, TITLE, follow, loadRecords, rowOf, writeView } from './rows'
 
-const MAX_ROWS = 5
+const MAX_ROWS = 10
 
 // The engine loads one hooks module per plugin (`hooks.json` `modules` refuses a second
 // entry, hook-load-failed past it), so this module is the one: it registers the pane's
@@ -78,7 +78,7 @@ const registerBand: Register = on => {
             <Button
               key={`band-${row.rec.task}`}
               plain
-              hotkey={String(i + 1)}
+              hotkey={String((i + 1) % 10)}
               onPress={async () => {
                 await writeView($, () => ({ task: row.rec.task }))
                 if (!(await $.ui.panes()).some(p => p.id === PANE)) await $.ui.open({ id: PANE, title: TITLE })

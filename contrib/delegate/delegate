@@ -31,7 +31,7 @@ HERE = Path(__file__).resolve().parent
 DATA = Path.home() / ".local/share/delegate"
 RUNS = DATA / "runs"
 LOG = DATA / "runs.jsonl"
-MAX_LIVE = 3
+MAX_LIVE = 10
 KILL_AFTER = 30  # seconds `timeout` waits after SIGTERM before it sends SIGKILL
 # The worker's environment starts empty plus these (if set), the Go key and DELEGATE_RUN.
 ALLOW = ("PATH", "HOME", "USER", "LANG", "TERM", "SHELL")

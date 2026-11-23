@@ -447,7 +447,7 @@ def _clone_file(path: Path, commit: str, location: str):
     path_, ref = m.group(1) or m.group(2), m.group(4) or commit
     try:
         out = subprocess.run(["git", "-C", str(path), "show", f"{ref}:{path_}"],
-                             capture_output=True, text=True, timeout=30)
+                             capture_output=True, text=True, errors="replace", timeout=30)
     except (OSError, subprocess.TimeoutExpired):
         return None
     if out.returncode != 0:

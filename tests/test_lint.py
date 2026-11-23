@@ -258,3 +258,13 @@ class TestCloneFileLocation(VaultTestCase):
         self.assertEqual(_clone_file(repo, "", f"win/Domain Controller/a b.ps1 L30 @ {sha}"), "")
         for bad in ("L5-2", "L0"):
             self.assertIsNone(_clone_file(repo, "", f"win/Domain Controller/a b.ps1 {bad} @ {sha}"), bad)
+
+    def test_non_utf8_file_does_not_crash(self):
+        import subprocess
+        from kb.lint import _clone_file
+        repo, _ = self.repo()
+        (repo / "latin1.txt").write_bytes("caf\xe9 line\n".encode("latin-1"))  # a Windows-1252 script, say
+        subprocess.run(["git", "-C", str(repo), "add", "."], check=True)
+        subprocess.run(["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "y"], check=True)
+        sha = subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD"], check=True, capture_output=True, text=True).stdout.strip()
+        self.assertEqual(_clone_file(repo, "", f"latin1.txt L1 @ {sha}"), "caf� line")
